@@ -32,9 +32,9 @@ This vignette walks through that workflow on a small simulated
 runnable end to end.
 
 ```{r install, eval = FALSE}
-if (!requireNamespace("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-BiocManager::install("cfomics")
+if (!requireNamespace("remotes", quietly = TRUE))
+    install.packages("remotes")
+remotes::install_github("matsui-lab/cfomics")
 ```
 
 ```{r libs, message = FALSE}

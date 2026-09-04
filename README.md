@@ -12,15 +12,18 @@ provisioned automatically through `basilisk`.
 
 ## Installation
 
-```r
-if (!requireNamespace("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
+Install the current version from GitHub:
 
-BiocManager::install("cfomics")
+```r
+if (!requireNamespace("remotes", quietly = TRUE))
+    install.packages("remotes")
+
+remotes::install_github("matsui-lab/cfomics")
 ```
 
-The development version can be installed from the release or devel branch of
-Bioconductor with `BiocManager::install(version = "devel")`.
+Bioconductor dependencies are resolved automatically when `BiocManager` is
+available. `cfomics` is being submitted to Bioconductor; once accepted it will
+also be installable with `BiocManager::install("cfomics")`.
 
 ## Getting started
 
