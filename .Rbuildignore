@@ -1,0 +1,16 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^data-raw$
+^renv\.lock$
+^renv$
+^\.github$
+^codecov\.yml$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^LICENSE\.md$
+^cran-comments\.md$
+^doc$
+^Meta$
+__pycache__
+\.pyc$

@@ -1,0 +1,76 @@
+Package: cfomics
+Type: Package
+Title: Comparing, Selecting and Combining CATE Estimators for Omics Data
+Version: 0.99.0
+Authors@R: c(
+    person("Yusuke", "Matsui",
+           role = c("aut", "cre"),
+           email = "mail.to.matsui@gmail.com")
+  )
+Description: A unified workflow for estimating conditional average treatment
+    effects (CATE) in high-dimensional omics data, where the sample size is
+    much smaller than the number of features and no single estimator is
+    reliably best in advance. The package fits many CATE estimators behind one
+    interface and compares them on a data-only loss, selects the best, or
+    combines them into an ensemble, so that an analysis does not hinge on an
+    arbitrary choice of method. SummarizedExperiment and MultiAssayExperiment
+    inputs are supported directly, and the estimated individual effects can be
+    written back onto these objects for downstream differential-expression and
+    pathway analyses. Both R-native estimators and Python backends
+    (provisioned automatically through basilisk) are included.
+License: MIT + file LICENSE
+URL: https://github.com/matsui-lab/cfomics
+BugReports: https://github.com/matsui-lab/cfomics/issues
+biocViews:
+    Software,
+    StatisticalMethod,
+    Regression,
+    GeneExpression,
+    DifferentialExpression,
+    FeatureExtraction,
+    Transcriptomics,
+    RNASeq
+Depends:
+    R (>= 4.2.0)
+Imports:
+    methods,
+    stats,
+    utils,
+    graphics,
+    Formula,
+    rlang,
+    cli,
+    glue,
+    glmnet,
+    ranger,
+    quadprog,
+    basilisk,
+    reticulate,
+    BiocParallel,
+    SummarizedExperiment
+VignetteBuilder: knitr
+Suggests:
+    MultiAssayExperiment,
+    S4Vectors,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    BiocStyle,
+    ggplot2,
+    grf,
+    bcf,
+    xgboost,
+    shapviz,
+    limma,
+    edgeR,
+    sva,
+    GSVA,
+    msigdbr,
+    RobustRankAggreg,
+    rpart,
+    rpart.plot,
+    policytree,
+    DiagrammeR
+Encoding: UTF-8
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
