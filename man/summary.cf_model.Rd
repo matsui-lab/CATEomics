@@ -12,8 +12,9 @@
 \item{...}{Additional arguments (unused)}
 }
 \value{
-A list containing summary statistics including ATE, confidence
-  intervals (if bootstrap was enabled), and ITE distribution statistics.
+A list with the ATE, its confidence interval and the label of the
+  method that produced it (\code{ci_method}), and the summary of the
+  \eqn{\hat\tau} distribution.
 }
 \description{
 Get summary statistics from a cf_model

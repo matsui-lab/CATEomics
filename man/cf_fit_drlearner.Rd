@@ -15,12 +15,13 @@ cf_fit_drlearner(
   cv = 5L,
   bootstrap_ci = FALSE,
   n_bootstrap = 100L,
-  trim = c(0.025, 0.975),
+  clip = .CF_PS_CLIP,
   propensity_score = NULL,
   propensity_X = NULL,
   random_state = NULL,
   binary_outcome = FALSE,
-  ...
+  params = list(),
+  propensity_params = list()
 )
 }
 \arguments{
@@ -39,58 +40,62 @@ Default \code{"logistic"}.}
 internally by econml. Default \code{"ridge"}.}
 
 \item{model_final}{Base-learner name for the final CATE regression.
-Default \code{"ridge"} (a regularised linear final stage), matching
-econml's \code{DRLearner} convention of a linear \code{model_final}
-(\code{StatsModelsLinearRegression}). \strong{Asymmetry with
-\code{\link{cf_fit_xlearner}}}: this \code{model_final} does \emph{not}
-track \code{model_outcome} (it stays linear unless overridden), whereas
-xlearner's Stage-2 model defaults to \code{model_outcome}. Both mirror
-their respective econml estimator. Pass \code{model_final} explicitly
-(e.g. \code{"rf"}) to give the DR final stage a non-linear form.
-Default \code{"ridge"}. Use \code{"linear"} for asymptotic Wald CIs
-via \code{StatsModelsLinearRegression}.}
+Default \code{"ridge"}. It does \emph{not} track \code{model_outcome},
+unlike \code{\link{cf_fit_xlearner}}'s Stage-2 model. \code{"linear"}
+enables asymptotic Wald CIs via
+\code{StatsModelsLinearRegression}.}
 
-\item{cv}{Integer, number of cross-fitting folds. Default \code{5} (econml's
-own default is 2; cfomics uses 5 for lower-variance nuisance in the n < p
-regime).}
+\item{cv}{Integer, number of cross-fitting folds. Default \code{5}.}
 
 \item{bootstrap_ci}{Logical. When \code{TRUE}, override any native CI
 path and compute percentile-method CIs from \code{n_bootstrap} refits.
-Default \code{FALSE}.}
+The resampling is implemented in CATEomics and is the same for every
+method that accepts it. Default \code{FALSE}.}
 
 \item{n_bootstrap}{Integer, number of bootstrap replicates when
 \code{bootstrap_ci = TRUE}. Default \code{100}.}
 
-\item{trim}{Length-2 numeric propensity clipping bounds.}
+\item{clip}{Length-2 numeric propensity clipping bounds.}
 
 \item{propensity_score}{Optional known propensity score (RCT context);
 scalar or length-n vector. Mutually exclusive with \code{model_propensity}.}
 
-\item{propensity_X}{Optional covariate subset (names or indices) the
-propensity model is restricted to.}
+\item{propensity_X}{Optional character vector of covariate names the
+propensity model is restricted to.
+With \code{propensity_X} unset this is the clinical covariates alone;
+see \code{\link{cf_fit}}.}
 
 \item{random_state}{Integer random seed. When set, yields reproducible
 results. Forwarded to each sklearn nuisance learner and to numpy's RNG
-inside the basilisk process. Because that process is ephemeral, seeding
-cannot leak into the caller's session.}
+inside the basilisk worker. That worker can be the calling R process
+itself, so the Python-side generators are snapshotted and restored around
+the call and the seeding does not leak into the caller's session.}
 
 \item{binary_outcome}{Logical. When \code{TRUE} the stage-1 outcome model
 becomes a probability classifier and DRLearner runs with
 \code{discrete_outcome = TRUE}.}
 
-\item{...}{Ignored (reserved for future arguments).}
+\item{params}{Named list with optional \code{outcome} / \code{final}
+blocks of hyperparameters for the base learners. A block reaches the
+scikit-learn estimator built in \code{inst/python/learner_factory.py},
+which raises on a hyperparameter it does not take. A flat entry is
+refused on the R side, because this method reads the blocks only.
+A value the Python side requires to be whole is written as an R
+integer (\code{10L}, not \code{10}), which R otherwise makes a double.}
+
+\item{propensity_params}{Named list of hyperparameters for the propensity model.}
 }
 \value{
 A list with \code{model} (\code{list(model_path, backend)}) and
-  \code{res} conforming to the \code{cfomics_result} contract.
+  \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
-Thin R wrapper around \code{econml.dr.DRLearner} using the shared cfomics
+Thin R wrapper around \code{econml.dr.DRLearner} using the shared CATEomics
 base-learner vocabulary for nuisance estimators (propensity, outcome,
 final CATE).
 }
 \details{
-Returns the full \code{cfomics_result} contract. The ITE is taken from
+Returns the full \code{cateomics_result} contract. The ITE is taken from
 the orthogonalized final stage (\code{dr$effect}); potential outcomes
 \eqn{\hat y_0, \hat y_1} are obtained separately by averaging the
 internal \code{models_regression} nuisance predictions over Monte Carlo
@@ -98,39 +103,33 @@ iterations and cross-validation folds (see
 \code{inst/python/metalearner_helpers.py::drlearner_potential_outcomes}).
 
 
-\strong{Option B semantics.} \eqn{\hat y_1 - \hat y_0} is the plug-in
+\eqn{\hat y_1 - \hat y_0} is the plug-in
 contrast of the nuisance outcome models, while \code{tau_hat} is the
-Neyman-orthogonal CATE from the final stage; these two quantities are
-\emph{not} required to agree numerically.
-
-\strong{Linear base learners produce a constant CATE.} With
-\code{model_outcome = model_final = "linear"}, the final-stage CATE
-projection collapses onto a single-coefficient contrast; use
-\code{"lasso"} / \code{"rf"} / \code{"elastic_net"} for at least the
-final stage to recover heterogeneity. See the family-level discussion
-in \code{\link{metalearners}}.
+Neyman-orthogonal CATE from the final stage; the two do not agree
+numerically.
 }
 \section{Execution model}{
 
-All Python work runs inside the cfomics basilisk environment via
-\code{.cf_py_run()} (a separate process). The fitted \code{DRLearner}
+All Python work runs inside the CATEomics basilisk environment via
+\code{.cf_py_run()}. The fitted \code{DRLearner}
 cannot be returned as a live object, so it is serialised with
 \code{joblib.dump()} to a cache file during fit and reloaded at predict
 time. The \code{model} pillar of the returned \code{cf_model} therefore
 holds \code{list(model_path, backend)} rather than a live estimator.
 }
 
-\section{Potential outcomes (Class B'}{
- Outcome regression as intermediate nuisance):
+\section{Potential outcomes -- Class B prime, outcome regression as an intermediate nuisance}{
+
 \code{mu0_hat} / \code{mu1_hat} are the cross-fit nuisance regressions
-(\code{models_regression}) averaged over Monte Carlo iterations.
+(\code{models_regression}) averaged over the Monte Carlo iterations and the cross-validation folds.
 \code{tau_hat} is the orthogonalised CATE projected by the final-stage
 regression on pseudo-outcomes.
 
-\strong{NOTE}: \code{mu1_hat - mu0_hat != tau_hat} by design — the
-Neyman-orthogonal final stage decouples CATE estimation from the
-plug-in nuisance contrast. \code{ate} is reported as \code{mean(tau_hat)}
-(orthogonal score), not \code{mean(mu1_hat - mu0_hat)}.
+\strong{NOTE}: \code{mu1_hat - mu0_hat != tau_hat}. The Neyman-orthogonal
+final stage regresses the pseudo-outcome rather than differencing the
+plug-in nuisance fits, so the two quantities come from different stages.
+\code{ate} is reported as \code{mean(tau_hat)} (orthogonal score), not
+\code{mean(mu1_hat - mu0_hat)}.
 }
 
 \section{Confidence intervals}{
@@ -144,4 +143,12 @@ set \code{bootstrap_ci = TRUE} to obtain percentile-method CIs from
 \code{n_bootstrap} refits (computed inside the same basilisk process).
 }
 
+\references{
+Kennedy (2023) Towards optimal doubly robust estimation of heterogeneous
+causal effects, \emph{Electron. J. Stat.} 17(2):3008-3049.
+
+Battocchi, Dillon, Hei, Lewis, Oka, Oprescu & Syrgkanis (2019) EconML: A
+Python Package for ML-Based Heterogeneous Treatment Effects Estimation,
+\url{https://github.com/py-why/EconML} (implementation).
+}
 \keyword{internal}

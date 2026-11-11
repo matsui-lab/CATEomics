@@ -2,7 +2,7 @@
 % Please edit documentation in R/cf_plot.R
 \name{cf_plot}
 \alias{cf_plot}
-\title{Plot helpers for cfomics objects}
+\title{Plot helpers for CATEomics objects}
 \value{
 This is an overview page for the \code{cf_plot_*} family; it does not
   define a function and has no return value. Each individual \code{cf_plot_*}
@@ -10,8 +10,10 @@ This is an overview page for the \code{cf_plot_*} family; it does not
 }
 \description{
 ggplot2-based plot helpers for the analysis objects
-(\code{cfomics_compare}, \code{cfomics_evaluate}, \code{cfomics_rule_grid},
-\code{cfomics_interpret}, \code{cfomics_model_stability}). Each helper
-extracts a small data.frame and builds the plot in a clean environment so
-the returned ggplot never captures the (potentially large) source object.
+(\code{cf_model}, \code{cateomics_compare}, \code{cateomics_evaluate},
+\code{cateomics_diagnostics}, \code{cateomics_rule},
+\code{cateomics_rule_grid}, \code{cateomics_interpret},
+\code{cateomics_model_stability}). Each helper extracts a small data.frame
+and builds the plot in a frame that holds only that, so the returned
+ggplot does not capture the source object.
 }

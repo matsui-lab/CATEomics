@@ -9,57 +9,73 @@ cf_interpret(
   surrogate = c("ridge", "xgb"),
   tau = NULL,
   top_n = 50L,
-  min_fidelity = 0.3,
-  xgb_nrounds = 100L,
-  xgb_max_depth = 4L,
-  random_state = NULL,
+  params = NULL,
+  random_state = 0L,
   ...
 )
 }
 \arguments{
-\item{model}{A \code{cf_model} or \code{cfomics_ensemble} object.}
+\item{model}{A \code{cf_model} or \code{cateomics_ensemble} object.}
 
 \item{surrogate}{Character vector; subset of \code{c("ridge", "xgb")}.
 Defaults to both. Order is preserved in the output.}
 
 \item{tau}{Optional numeric vector of length n to use as the target
-instead of \code{model$res$tau_hat_oof}. The intended use is debugging /
-reproducibility; production users should leave it \code{NULL}.}
+instead of \code{model$res$tau_hat_oof}. \code{NULL} (default) reads the
+model's OOF tau-hat, falling back to the in-sample tau-hat with a
+warning.}
 
-\item{top_n}{Integer; how many features to keep in the per-surrogate
-\code{features} table (sorted by signed importance magnitude).}
+\item{top_n}{Integer (default \code{50}); how many features to keep in
+the per-surrogate
+\code{features} table (sorted by \code{importance}, the mean absolute
+SHAP value).}
 
-\item{min_fidelity}{Numeric; threshold below which the function emits
-a low-fidelity informational message.}
+\item{params}{Hyperparameters for the surrogate fits, as a list named by
+surrogate: \code{list(ridge = list(nfolds = 10), xgb = list(nrounds = 200,
+max_depth = 6))}. The names are the ones the R package that runs the
+surrogate takes -- \code{glmnet::cv.glmnet} (and what it forwards to
+\code{glmnet::glmnet}) for \code{"ridge"}, \code{xgboost::xgb.train}
+(and the booster hyperparameters of \code{xgboost::xgb.params}) for
+\code{"xgb"}. An unknown name is an error. \code{alpha} is fixed at 0,
+so the linear surrogate is always a ridge; the XGB objective is fixed to
+squared error because the surrogate regresses on tau-hat. Defaults:
+\code{nfolds = 5} for the ridge, and \code{nrounds = 100},
+\code{max_depth = 4}, \code{eta = 0.1},
+\code{min_child_weight = 10} and \code{colsample_bytree = 0.5} for the
+XGB. The resolved values are returned in
+\code{vi$<surrogate>$params}.}
 
-\item{xgb_nrounds}{Integer; number of boosting rounds for the XGB
-surrogate (default \code{100}).}
+\item{random_state}{Seed (default \code{0}) for the surrogate fits and the
+fold split used by the held-out fidelity.}
 
-\item{xgb_max_depth}{Integer; max tree depth for the XGB surrogate.}
-
-\item{random_state}{Optional seed for the XGB surrogate.}
-
-\item{...}{Currently unused.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-An object of class \code{c("cfomics_interpret", "list")} with
+An object of class \code{c("cateomics_interpret", "list")} with
   elements:
   \describe{
     \item{\code{vi}}{Named list of one entry per requested surrogate, each
       with \code{features} (\code{data.frame} of \code{feature_name},
       \code{importance} (mean|SHAP|), \code{direction}
       (\code{sign(cor(x_j, phi_j))}), \code{rank}), the full
-      per-observation \code{shap} matrix (n x p) and feature-value matrix
-      \code{X} for the internal shapviz coercion, \code{fidelity}
-      (R^2 on \eqn{\hat\tau}), and \code{surrogate} (label).}
+      per-observation \code{shap} matrix (n x p), \code{fidelity}
+      (K-fold held-out R^2 of the surrogate on \eqn{\hat\tau};
+      \code{NA} when there are too few rows to hold any out),
+      \code{params} (the resolved surrogate settings) and
+      \code{surrogate} (label).}
+    \item{\code{X}}{The design matrix the surrogates were fitted on, held
+      once for the object rather than once per surrogate. It is the
+      preprocessed design, and it is what the \pkg{shapviz} coercion
+      pairs with each \code{shap} matrix.}
     \item{\code{metadata}}{Method, partition, surrogate names,
-      \code{tau_source}, \code{n}, \code{p}, fidelity warnings.}
+      \code{tau_source}, \code{n}, \code{p}.}
   }
 }
 \description{
 \code{cf_interpret()} distils the model's out-of-fold tau hat into two
 surrogate models and reports per-feature signed SHAP contributions plus
-a fidelity score:
+a held-out fidelity score. SHAP comes from the surrogate fitted on all
+rows; fidelity is measured on rows each surrogate fit did not see:
 }
 \details{
 \describe{
@@ -67,21 +83,25 @@ a fidelity score:
     on z-scored \eqn{X}. For a linear model the per-observation SHAP is
     \eqn{\phi_j(x_i) = \beta_j (x_{ij} - \bar x_j)}; we report the mean
     absolute contribution as the importance and \code{sign(beta_j)} as
-    the sign. Robust to \eqn{p \gg n}.}
+    the sign.}
   \item{\code{"xgb"}}{\code{xgboost} gradient boosting of \eqn{\hat\tau}
     on \eqn{X} with TreeSHAP via
-    \code{predict(..., predcontrib = TRUE)}. Picks up non-linearities
-    and interactions.}
+    \code{predict(..., predcontrib = TRUE)}.}
 }
 
 Fidelity is \eqn{R^2 = 1 - \mathrm{RSS} / \mathrm{TSS}} of the surrogate
-on the same \eqn{\hat\tau} target. Low fidelity (< 0.3 by default)
-triggers an informational message.
+on the same \eqn{\hat\tau} target: how much of the estimated effect the
+surrogate reproduces.
+
+A positive SHAP contribution is one that raises \eqn{\hat\tau}, which on
+CATEomics' convention that a larger \code{Y} is the better outcome (see
+\code{Y} in \code{\link{cf_fit}}) means it raises the benefit of
+treatment. For an outcome whose smaller values are better, fit the negated
+outcome, or every sign here reads the wrong way round.
 }
 \section{Surrogate distillation}{
 
-The interpretation uses a surrogate distillation path rather than
-method-native variable importance. The contract is uniform across all
+The interpretation uses a surrogate distillation path. The contract is uniform across all
 CATE-capable methods (including \code{cf_ensemble} output) and
 avoids reaching into method-specific internals. The entire
 interpretation surface is R-native (\code{glmnet} + \code{xgboost}).
@@ -100,9 +120,10 @@ head(itp$vi$xgb$features)
 \references{
 Lundberg & Lee (2017) A Unified Approach to Interpreting Model Predictions,
 \emph{NeurIPS} 30 (arXiv:1705.07874).
+
 Lundberg et al. (2020) From local explanations to global understanding with
 explainable AI for trees (TreeSHAP), \emph{Nature Machine Intelligence}
-2:56–67.
+2:56-67.
 }
 \seealso{
 \code{\link{cf_plot_interpret}} for the delegated \pkg{shapviz}

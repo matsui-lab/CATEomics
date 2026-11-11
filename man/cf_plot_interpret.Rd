@@ -14,7 +14,7 @@ cf_plot_interpret(
 )
 }
 \arguments{
-\item{itp}{A \code{cfomics_interpret} object (from \code{cf_interpret}).}
+\item{itp}{A \code{cateomics_interpret} object (from \code{cf_interpret}).}
 
 \item{type}{One of \code{"bar"} (mean|SHAP| importance, default),
 \code{"beeswarm"} (per-observation SHAP distribution), or
@@ -27,12 +27,22 @@ cf_plot_interpret(
 (default \code{20}).}
 
 \item{surrogate}{Which surrogate to plot ("ridge" / "xgb"); \code{NULL}
-(default) picks the first available.}
+(default) picks the first available. For the linear surrogate
+(\code{"ridge"}) the dependence view is a straight line by construction:
+its SHAP value for a feature is that feature's coefficient times its
+standardised value, so the relation it draws has no curvature to show.
+The points are coloured by a second feature that \pkg{shapviz} picks
+with its own interaction heuristic, not one that was asked for, and with
+no interaction in the data the candidates score almost alike.}
 
 \item{...}{Passed to the underlying \pkg{shapviz} function.}
 }
 \value{
-A ggplot object.
+A ggplot object, titled and themed like the other
+  \code{cf_plot_*} views; adding \code{ggplot2::labs(title = ...)} or a
+  \pkg{ggplot2} theme to it replaces either. Adding layers or scales
+  restyles the panel, but the single colours are set as constants rather
+  than mapped, so a colour scale added afterwards does not reach them.
 }
 \description{
 Coerces the \code{cf_interpret} result to a \pkg{shapviz} object

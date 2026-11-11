@@ -9,16 +9,18 @@ cf_fit_bcf(
   T,
   Y,
   covariate_names = NULL,
-  n_burn = 1000L,
-  n_iter = 2000L,
+  nburn = 1000L,
+  nsim = 2000L,
   n_chains = 4L,
   pihat = NULL,
   propensity_score = NULL,
-  trim = c(0.025, 0.975),
+  clip = .CF_PS_CLIP,
   propensity_X = NULL,
+  model_propensity = "logistic",
+  propensity_params = list(),
   save_tree_directory = NULL,
   random_state = NULL,
-  ...
+  params = list()
 )
 }
 \arguments{
@@ -30,72 +32,110 @@ cf_fit_bcf(
 
 \item{covariate_names}{Character vector of covariate names.}
 
-\item{n_burn}{Integer, MCMC burn-in iterations. Default \code{1000}.}
+\item{nburn}{Integer, MCMC burn-in iterations. Default \code{1000}.}
 
-\item{n_iter}{Integer, MCMC iterations kept after burn-in.
+\item{nsim}{Integer, MCMC iterations kept after burn-in.
 Default \code{2000}.}
 
 \item{n_chains}{Integer, number of MCMC chains, passed to
 \code{bcf::bcf()} (which runs the chains internally, pools the posterior
 draws across them, and persists every chain's tree samples). When
-\code{n_chains > 1L} cfomics computes the Gelman-Rubin \eqn{\hat R} on the
+\code{n_chains > 1L} CATEomics computes the Gelman-Rubin \eqn{\hat R} on the
 per-chain ATE-per-iteration draws; \eqn{\hat R > 1.1} triggers a
-\code{cfomics_bcf_mcmc_not_converged} warning. Default \code{4L} (the bcf
-default; needed for a between-chain \eqn{\hat R} convergence check).}
+\code{cateomics_bcf_mcmc_not_converged} warning. Default \code{4L} (the bcf
+default).}
 
 \item{pihat}{Optional numeric vector of pre-computed propensity scores.
-If \code{NULL}, estimated internally via a logistic cfomics base
-learner.}
+If \code{NULL}, estimated internally with the learner named by
+\code{model_propensity}.}
+
+\item{propensity_score}{Known propensity score: a scalar in (0, 1) or a
+length-n vector. \code{NULL} (default) estimates it internally.}
+
+\item{clip}{Length-2 numeric, the bounds the propensity is held within
+(default \code{c(0.025, 0.975)}). Values are replaced by the bound; no
+sample is dropped.}
+
+\item{propensity_X}{Optional character vector of covariate names to
+restrict the propensity model to. Reached through \code{\link{cf_fit}} or
+\code{\link{cf_compare}}, leaving it unset fits the propensity on the
+clinical covariates alone; called directly, \code{NULL} means every
+column of the design matrix.}
+
+\item{model_propensity}{Base-learner token for the internal propensity
+model, used when \code{pihat} and \code{propensity_score} are both
+\code{NULL}. Default \code{"logistic"}, the same default as the other
+methods that estimate a propensity. \code{bcf::bcf()} requires
+\code{pihat} and names no estimator of its own, so this is CATEomics's
+choice. The outcome model is the BART forest and is not pluggable.}
+
+\item{propensity_params}{Named list of hyperparameters for that propensity
+model, validated against the named learner.}
 
 \item{save_tree_directory}{Directory to persist MCMC tree samples.
 Required when \code{predict(newdata = ...)} is used. Defaults to a
-per-call \code{tempfile()} under \code{tempdir()} to avoid polluting
-the working directory. Set to a stable path if the tree samples must
-survive beyond the current R session.}
+per-call \code{tempfile()} under \code{tempdir()}; set a stable path to
+keep the tree samples beyond the current R session.}
 
 \item{random_state}{Integer random seed, forwarded to \code{bcf::bcf()}
 via its \code{random_seed} argument and used to seed the internal
-propensity submodel. When set, yields bit-identical results across
-runs with the same inputs. The caller's global \code{.Random.seed}
-is saved on entry and restored on exit so seeding does not leak into
-the user's session.}
+propensity submodel. It does not by itself make a fit bit-identical
+across runs: \code{bcf::bcf()} defaults its \code{n_threads} to two
+fewer than the machine reports and combines each iteration's partial
+results in whatever order the threads finish, which the seed does not
+fix. Measured on 200 rows with a short chain, two fits with the same seed
+differ by about 5e-08 in sample, and by as much as 8e-03 on some training
+subsets. Pass \code{params = list(n_threads = 1L)} for a bit-identical
+fit. The caller's global \code{.Random.seed} is saved on entry and
+restored on exit so seeding does not leak into the user's session.}
 
-\item{...}{Additional arguments forwarded to \code{bcf::bcf()}.}
+\item{params}{Named list of additional arguments forwarded to
+\code{bcf::bcf()} (flat; there is no nested block). Names are checked on
+the R side against the arguments of this fitter and of
+\code{bcf::bcf()}, so an unknown name aborts before sampling starts.}
 }
 \value{
 A list with \code{model} (the \code{bcf::bcf()} fit object,
   retaining \code{save_tree_directory} for prediction on \code{newdata})
-  and \code{res} conforming to the \code{cfomics_result} contract.
+  and \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Heterogeneous treatment-effect estimation via Bayesian Additive Regression
 Trees (Hahn, Murray & Carvalho 2020). Delegates to \code{bcf::bcf()} with
-cfomics-side propensity estimation when \code{pihat} is not supplied.
+CATEomics-side propensity estimation when \code{pihat} is not supplied.
 }
 \details{
-Returns the full \code{cfomics_result} contract (\code{tau_hat},
-\code{mu0_hat}, \code{mu1_hat}, \code{ate} and summary) derived from the
-MCMC posterior: \code{tau_hat} is the posterior mean of the CATE draws;
+Returns \code{tau_hat}, \code{mu0_hat}, \code{mu1_hat} and \code{ate}
+derived from the MCMC posterior; \code{res$summary} is assembled centrally
+by the entry that called this. \code{tau_hat} is the posterior mean of the CATE draws;
 counterfactual means use the y-hat posterior at \eqn{T=0} / \eqn{T=1}.
 
 Binary (0/1) outcomes are modelled on the native continuous scale, so the
 estimand is the risk difference; the counterfactual means may fall outside
 \eqn{[0, 1]} and the credible intervals are approximate (bcf has no binary
-likelihood). For a proper binary likelihood use a meta/DR learner
-(classifier nuisance) or a neural method.
+likelihood).
 
-The BART outcome forest can fail to converge when covariates far outnumber
-samples (n << p); the fit then aborts with a \code{cfomics_bcf_degenerate}
-error. This is a numerical property of BART on wide data, not all methods
-behave this way, so \code{\link{cf_compare}} records the failure in
-\code{metadata$failed_methods} and continues with the remaining methods.
+The BART outcome forest can fail to converge when the rows reaching it are
+not comfortably more numerous than the covariates; the fit then aborts with
+a \code{cateomics_bcf_degenerate} error, and \code{\link{cf_compare}} records
+it in \code{metadata$failed_methods} and continues with the remaining
+methods. \code{cf_compare()} fits each fold on
+\code{n - ceiling(n / n_folds)} rows, so a fit that succeeds on the whole
+sample can still fail in a fold.
 
 
 When \code{pihat = NULL}, propensity scores are estimated internally with
-a logistic cfomics base learner before the BCF call; the seed passed via
-\code{random_state} is used for both that submodel and \code{bcf::bcf()}.
+the \code{model_propensity} base learner before the BCF call; the seed
+passed via \code{random_state} is used for both that submodel and
+\code{bcf::bcf()}. The fitted submodel is persisted so that
+\code{predict(newdata = ...)} re-applies the same learner.
 MCMC tree samples are persisted under \code{save_tree_directory} so that
 \code{predict(newdata = ...)} can draw posterior samples via
 \code{bcf:::predict.bcf} without retraining.
+}
+\references{
+Hahn, Murray & Carvalho (2020) Bayesian Regression Tree Models for Causal
+Inference: Regularization, Confounding, and Heterogeneous Effects,
+\emph{Bayesian Anal.} 15(3):965-1056.
 }
 \keyword{internal}

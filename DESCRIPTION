@@ -1,26 +1,31 @@
-Package: cfomics
+Package: CATEomics
 Type: Package
-Title: Comparing, Selecting and Combining CATE Estimators for Omics Data
+Title: Model Selection and Ensemble Learning in Heterogeneous Treatment
+    Effect Estimation from High-Dimensional Omics Data
 Version: 0.99.0
 Authors@R: c(
-    person("Yusuke", "Matsui",
+    person("Takeru", "Furuta",
            role = c("aut", "cre"),
-           email = "mail.to.matsui@gmail.com")
+           email = "f.take0426@gmail.com"),
+    person("Yusuke", "Matsui",
+           role = "aut",
+           email = "mail.to.matsui@gmail.com"),
+    person("Koichi", "Himori", role = "ctb"),
+    person("Bingyuan", "Zhang", role = "ctb"),
+    person("Akihiro", "Kitani", role = "ctb")
   )
-Description: A unified workflow for estimating conditional average treatment
-    effects (CATE) in high-dimensional omics data, where the sample size is
-    much smaller than the number of features and no single estimator is
-    reliably best in advance. The package fits many CATE estimators behind one
-    interface and compares them on a data-only loss, selects the best, or
-    combines them into an ensemble, so that an analysis does not hinge on an
-    arbitrary choice of method. SummarizedExperiment and MultiAssayExperiment
-    inputs are supported directly, and the estimated individual effects can be
-    written back onto these objects for downstream differential-expression and
-    pathway analyses. Both R-native estimators and Python backends
-    (provisioned automatically through basilisk) are included.
+Description: Addresses the lack of a standardized and reproducible process
+    for choosing among conditional average treatment effect (CATE) estimators
+    in high-dimensional omics studies, where their estimation errors cannot be
+    evaluated directly from observed outcomes. The package accepts a
+    SummarizedExperiment, applies common preprocessing and data partitions
+    across R and Python estimators, compares their out-of-fold estimates using
+    proxy losses, supports model selection and ensembling, and returns the
+    resulting CATE estimates to the original object for downstream omics
+    analysis. Python backends are provisioned automatically through basilisk.
 License: MIT + file LICENSE
-URL: https://github.com/matsui-lab/cfomics
-BugReports: https://github.com/matsui-lab/cfomics/issues
+URL: https://github.com/matsui-lab/CATEomics
+BugReports: https://github.com/matsui-lab/CATEomics/issues
 biocViews:
     Software,
     StatisticalMethod,
@@ -31,7 +36,7 @@ biocViews:
     Transcriptomics,
     RNASeq
 Depends:
-    R (>= 4.2.0)
+    R (>= 4.3.0)
 Imports:
     methods,
     stats,
@@ -39,38 +44,36 @@ Imports:
     graphics,
     Formula,
     rlang,
-    cli,
-    glue,
     glmnet,
     ranger,
+    xgboost (>= 2.1.0),
     quadprog,
     basilisk,
     reticulate,
     BiocParallel,
-    SummarizedExperiment
-VignetteBuilder: knitr
-Suggests:
-    MultiAssayExperiment,
+    SummarizedExperiment,
     S4Vectors,
-    testthat (>= 3.0.0),
-    knitr,
-    rmarkdown,
-    BiocStyle,
+    MultiAssayExperiment,
     ggplot2,
     grf,
+    edgeR (>= 4.0.0),
+    policytree,
+    RobustRankAggreg
+VignetteBuilder: knitr
+Suggests:
+    testthat (>= 3.0.0),
+    knitr,
+    callr,
+    rmarkdown,
+    BiocStyle,
     bcf,
-    xgboost,
     shapviz,
     limma,
-    edgeR,
     sva,
     GSVA,
-    msigdbr,
-    RobustRankAggreg,
-    rpart,
-    rpart.plot,
-    policytree,
+    msigdbr (>= 10.0.0),
     DiagrammeR
 Encoding: UTF-8
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
+StagedInstall: no

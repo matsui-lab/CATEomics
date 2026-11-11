@@ -13,10 +13,11 @@ cf_fit_dragonnet(
   n_iter = 10000L,
   batch_size = 100L,
   learning_rate = 1e-04,
+  val_split_prop = 0.3,
   binary_y = FALSE,
   device = "cpu",
   binary_outcome = FALSE,
-  ...
+  params = list()
 )
 }
 \arguments{
@@ -29,12 +30,15 @@ cf_fit_dragonnet(
 \item{covariate_names}{Character vector of covariate names.}
 
 \item{random_state}{Integer seed (forwarded to numpy / torch / Python
-RNGs inside the wrapper). When \code{NULL}, no seeding is performed.}
+RNGs inside the wrapper). When \code{NULL}, no seeding is performed.
+The seed does not reach the thread count: a fit repeats bit-exactly
+while the thread count is the same, and its low-order digits change
+when that count changes. The thread count is set outside R, for
+instance through \code{OMP_NUM_THREADS}.}
 
 \item{n_iter}{Integer number of training iterations. Default
 \code{10000} (catenets upstream default, with early stopping at
-\code{n_iter_min = 200} + \code{patience = 10}); much smaller values
-leave TARNet under-trained on n<<p low-SNR data.}
+\code{n_iter_min = 200} + \code{patience = 10}).}
 
 \item{batch_size}{Integer mini-batch size. Default \code{100}
 (catenets upstream default).}
@@ -42,25 +46,46 @@ leave TARNet under-trained on n<<p low-SNR data.}
 \item{learning_rate}{Numeric learning rate. Default \code{1e-4}
 (catenets upstream default).}
 
+\item{val_split_prop}{Numeric fraction of the supplied rows catenets holds
+out to decide when to stop. Default \code{0.3} (catenets upstream
+default), so the weights are fitted on the other 70 percent; under
+\code{partition = "oof"} that is 70 percent of each fold's training part.
+The held-out rows score the factual outcome only. \code{0} makes the
+training rows the held-out set as well, so every row trains; catenets
+keeps stopping early, now on the training loss, since that is governed by
+a separate argument CATEomics does not set.}
+
 \item{binary_y}{Logical, whether the outcome head is binary. Default
 \code{FALSE} (continuous Y, matches catenets upstream default). Binary
 outcomes are normally set automatically via \code{cf_fit(outcome_type =)}.}
 
-\item{...}{Ignored (only the explicit hyper-parameters above are
-forwarded to the catenets TARNet constructor).}
+\item{device}{Character, \code{"auto"} / \code{"cpu"} / \code{"gpu"}.}
+
+\item{binary_outcome}{Logical; when \code{TRUE} the outcome is treated as
+a class label and the effect is a risk difference.}
+
+\item{params}{Named list passed straight to the catenets
+\code{DragonNet} constructor, so its names are catenets' own. CATEomics
+does not check them here: an unknown name raises a \code{TypeError}
+from catenets.
+A value the Python side requires to be whole is written as an R
+integer (\code{10L}, not \code{10}), which R otherwise makes a double.}
 }
 \value{
-A list with \code{model} (the catenets python object) and
-  \code{res} conforming to the \code{cfomics_result} contract.
+A list with \code{model} (the path the fitted estimator was
+  serialised to, and the backend name) and
+  \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Thin R wrapper around \pkg{catenets} (van der Schaar lab, v0.2.x)
 \code{DragonNet} (Shi-Blei-Veitch, NeurIPS 2019). DragonNet shares a
-representation backbone with TARNet but adds an auxiliary propensity
-head plus targeted regularisation for ATE inference.
+representation backbone with TARNet and adds an auxiliary propensity head,
+whose binary cross-entropy enters the training loss weighted by
+\code{prop_loss_multiplier}. catenets v0.2.x implements no targeted
+regularisation.
 }
-\section{Potential outcomes (Class A4}{
- Neural representation):
+\section{Potential outcomes -- Class A, direct potential-outcome output}{
+
 \code{mu0_hat} / \code{mu1_hat} are the two output heads' predictions on
 the shared representation. By construction
 \code{mu1_hat - mu0_hat == ite} (plug-in CATE).
@@ -71,4 +96,12 @@ the shared representation. By construction
 See \code{\link{cf_fit_tarnet}}; identical RNG handling applies.
 }
 
+\references{
+Shi, Blei & Veitch (2019) Adapting neural networks for the estimation of
+treatment effects, \emph{NeurIPS} 32.
+
+Curth & van der Schaar (2021) Nonparametric Estimation of Heterogeneous
+Treatment Effects: From Theory to Learning Algorithms, \emph{AISTATS}
+(catenets, implementation).
+}
 \keyword{internal}

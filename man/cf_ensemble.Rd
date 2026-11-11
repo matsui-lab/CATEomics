@@ -15,57 +15,85 @@ cf_ensemble(
 )
 }
 \arguments{
-\item{compare_result}{A \code{cfomics_compare} object from
-\code{cf_compare()}. Single \code{cf_model} inputs are rejected for
-consistency with \code{cf_select()}.}
+\item{compare_result}{A \code{cateomics_compare} object from
+\code{cf_compare()}. A single \code{cf_model} is rejected.}
 
-\item{method}{One of \code{"mean"}, \code{"softmax"}, \code{"r_stacking"},
-\code{"dr_stacking"}, \code{"cba"}.}
+\item{method}{One of \code{"mean"} (the default), \code{"softmax"},
+\code{"r_stacking"}, \code{"dr_stacking"}, \code{"cba"}. The two
+stacking rules require more scored rows than they have free weights (one
+per kept method, less one for \code{dr_stacking}, whose weights sum to
+one) and abort otherwise; they fall back to equal weights, with a
+warning, when the quadratic program fails.}
 
 \item{loss}{Loss column used by \code{method = "softmax"} only; one of
-\code{"r_loss"}, \code{"dr_loss"}, \code{"factual_loss"} (pulled from the
+\code{"r_loss"} (the default), \code{"dr_loss"},
+\code{"factual_loss"} (pulled from the
 cf_compare scoreboard to weight methods). \code{r_stacking} and
 \code{dr_stacking} ignore \code{loss} — they hard-code their objective
 (R-loss / DR pseudo-outcome respectively), and \code{mean} / \code{cba}
 do not use a loss at all.}
 
-\item{eta}{Softmax temperature; only used when \code{method = "softmax"}.
-\code{eta = 0} reduces to equal weights, \code{eta -> Inf} concentrates
-on the lowest-loss method.}
+\item{eta}{Softmax temperature (default \code{1}); only used when
+\code{method = "softmax"}. Any value that is not positive and finite,
+including \code{0} and negatives, gives equal weights;
+\code{eta -> Inf} concentrates on the lowest-loss method.}
 
 \item{cor_method}{Correlation method for \code{method = "cba"}; one of
 \code{"kendall"} (default), \code{"spearman"}, \code{"pearson"}.}
 
 \item{min_cba}{Minimum number of methods to retain in the cba consensus
-subset (clamps the kneedle output from below).}
+subset (default \code{2}; clamps the kneedle output from below).}
 
-\item{...}{Currently unused; reserved for future extensions.}
+\item{...}{Not used; naming an unknown argument is an error
+(\code{cateomics_unknown_argument}).}
 }
 \value{
 An object of class
-  \code{c("cfomics_ensemble", "cf_model")} with the
+  \code{c("cateomics_ensemble", "cf_model")} with the
   minimum contract required by downstream functions:
   \itemize{
     \item \code{method} = \code{"ensemble"} (so \code{cf_evaluate} /
           \code{cf_benefit_groups} treat it as a CATE-capable result);
-    \item \code{tau_hat_oof} = the combined OOF tau hat;
-    \item \code{nuisance} = the cached \code{nuisance_oof};
-    \item \code{data} = list with \code{Y}, \code{T}, \code{X};
-    \item \code{meta} = list with \code{partition = "oof"},
+    \item \code{res} = list with \code{tau_hat_oof} (the combined OOF
+          tau hat), \code{tau_hat = NULL} (an ensemble has no backend of
+          its own), \code{fold_id} (the shared split that produced the
+          out-of-fold estimates), \code{ate}, \code{mu0_hat},
+          \code{mu1_hat}
+          (Robinson reconstruction from the nuisance and the ensemble tau),
+          \code{nuisance} (the cached \code{nuisance_oof}) and
+          \code{summary};
+    \item \code{model} = the members carrying non-zero weight, which is
+          what \code{predict(object, newdata = )} scores;
+    \item \code{data} = list with \code{Y}, \code{T},
+          \code{X_preprocessed};
+    \item \code{meta} = the same pillar a \code{\link{cf_fit}} result
+          carries (see \code{cateomics_result}), with
+          \code{partition = "oof"} and the ensemble's own fields:
           \code{ensemble_method}, \code{loss}, \code{eta},
-          \code{covariate_names}, \code{n}, \code{p}, \code{methods_used};
-    \item \code{fit$res} = list with \code{ite}, \code{ate},
-          \code{summary}, \code{mu0_hat}, \code{mu1_hat} (Robinson
-          reconstruction from nuisance + ensemble tau);
+          \code{cor_method}, \code{methods_used},
+          \code{methods_dropped}, \code{consensus_members},
+          and \code{n_rows_rescaled} (rows combined from fewer members than
+          the weights name, because a member's out-of-fold column was
+          missing there). The fold count and the split are in
+          \code{estimator}, the seed in \code{provenance$rng_seed}. The
+          slots the newdata path reads on a single fit are \emph{absent}
+          here: each member carries its own preprocessing record and
+          \code{predict(object, newdata = )} delegates to the members, so
+          the ensemble has nothing of its own to record there;
     \item \code{weights} = named numeric vector of length \eqn{K}
-          giving the combination weights (zeros for methods not
-          included by cba).
+          giving the combination weights (zero for configs dropped during
+          cleaning, and for the ones cba leaves out of the consensus
+          subset).
   }
+
+  With a binary outcome \code{mu0_hat} / \code{mu1_hat} can fall outside
+  \eqn{[0, 1]}, with every combination method, since they are reconstructed
+  from the nuisance and the combined effect rather than predicted directly.
 }
 \description{
-\code{cf_ensemble()} is the third leg of the comparison / selection /
+\code{cf_ensemble()} is the combination step of the comparison /
 integration triplet (alongside \code{\link{cf_compare}} and
-\code{\link{cf_select}}). It consumes a \code{cfomics_compare} object and
+\code{\link{cf_select}}). It consumes a \code{cateomics_compare} object and
 returns a CATE estimator that combines the per-method OOF tau hats
 without refitting any nuisance models.
 }
@@ -74,34 +102,30 @@ Five combination rules are available, all powered by the cached
 \code{oof_tau_matrix} and \code{nuisance_oof} on the input object:
 
 \describe{
-  \item{\code{"mean"}}{Equal weights \eqn{w_k = 1/K}. The simplest
-    baseline ensemble.}
+  \item{\code{"mean"}}{Equal weights \eqn{w_k = 1/K}.}
   \item{\code{"softmax"}}{Score-based softmax weights
     \eqn{w_k = \exp(\eta s_k) / \sum_j \exp(\eta s_j)} with
     \eqn{s_k = -\text{loss}_k}. Reduces to mean as \code{eta -> 0}
     and to a single-best selection as \code{eta -> Inf}.}
-  \item{\code{"r_stacking"}}{Non-negative least-squares (NNLS) stacking
-    against the R-loss residuals, solved as a small QP under
-    \eqn{w \ge 0} only (no sum-to-one constraint). This matches the
-    R-loss "R-Stacking" formulation (Nie & Wager R-loss objective): the
-    residual-on-residual regression \eqn{Yres \approx \sum_k w_k\, Tres\,
-    \tau_k} sets the overall scale itself, so forcing \eqn{\sum w = 1}
-    would over-constrain it (and block legitimate shrinkage). The convex
-    \eqn{\sum w = 1} constraint belongs instead to the DR pseudo-outcome
-    objective (Han & Wu causal stacking); see \code{dr_stacking}.}
+  \item{\code{"r_stacking"}}{Non-negative least squares against the R-loss
+    residuals, \eqn{Yres \approx \sum_k w_k\, Tres\, \tau_k} under
+    \eqn{w \ge 0}, solved as a small QP. The loss is the R-loss of
+    Nie & Wager (2021); minimising it over non-negative weights, with no
+    sum-to-one constraint, is what Han & Wu (2022) write as their
+    eq. (4). Nie & Wager's own stacking step also fits an intercept and a
+    constant treatment-effect term; this does not.}
   \item{\code{"dr_stacking"}}{Convex stacking (\eqn{w \ge 0, \sum w = 1})
-    targeting the DR pseudo-outcome \eqn{\hat\tau^{PO}}, i.e. Han & Wu
-    (2022) causal stacking \eqn{\arg\min_w \sum_i (\hat\tau^{PO}_i -
-    \sum_k w_k \tau_k(x_i))^2}. The convex constraint keeps the ensemble
-    calibrated to the \eqn{\tau} scale.}
-  \item{\code{"cba"}}{Consensus-Based Averaging (Machluf et al. 2026
-    \emph{arXiv:2407.03690}). Ranks methods by mean off-diagonal
-    correlation (the correlation-knee helper) and averages the consensus subset above the
-    kneedle knee.}
+    targeting the DR pseudo-outcome \eqn{\hat\tau^{PO}}, i.e. the causal
+    stacking Han & Wu (2022) write as their eq. (2),
+    \eqn{\arg\min_w \sum_i (\hat\tau^{PO}_i -
+    \sum_k w_k \tau_k(x_i))^2}.}
+  \item{\code{"cba"}}{Consensus-Based Averaging (Machluf et al. 2024).
+    Ranks methods by mean off-diagonal correlation and averages the
+    consensus subset above the knee of that curve.}
 }
 
-Refit cost is zero in all cases: every method's full-data and OOF
-artifacts already live on the input \code{cfomics_compare} object.
+No method is refitted: the weights are computed from the OOF artifacts
+already on the input \code{cateomics_compare} object.
 }
 \section{Downstream}{
 
@@ -111,15 +135,6 @@ The minimum contract above is enough for
 against the ensemble. The combination weights are stored on the result.
 }
 
-\section{References}{
-
-Machluf, Frostig, Milo, Carlin, Berkman & Pryluk (2026) Robust CATE
-estimation using novel ensemble methods (CBA), \emph{J. Biopharmaceutical
-Statistics}, doi:10.1080/10543406.2026.2668583.
-Han & Wu (2022) Causal stacking, \emph{arXiv:2202.12445}.
-Nie & Wager (2021) Quasi-Oracle Estimation of HTE, \emph{Biometrika}.
-}
-
 \examples{
 # Two R-native CATE methods (grf + a short-MCMC bcf), then combine their
 # per-patient effects. Runs without Python.
@@ -127,9 +142,22 @@ se  <- cf_example_data(n = 50, p = 40, n_prog = 8, n_pred = 4, seed = 1)
 cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
                   X_baseline = c("age", "sex"),
                   methods = c("grf", "bcf"), n_features = 25,
-                  n_burn = 10L, n_iter = 10L, n_chains = 1L,  # 1 chain keeps bcf fast
-                  propensity_score = 0.5, random_state = 1)
+                  # 1 chain keeps bcf fast
+                  params = list(bcf = list(nburn = 10L, nsim = 10L,
+                                           n_chains = 1L)),
+                  propensity_score = 0.5, eval_propensity_score = 0.5,
+                  random_state = 1)
 ens <- cf_ensemble(cmp, method = "mean")
 ens
 
+}
+\references{
+Machluf, Frostig, Shoham, Milo, Berkman & Pryluk (2024) Robust CATE
+Estimation Using Novel Ensemble Methods (CBA), \emph{arXiv:2407.03690}.
+
+Han & Wu (2022) Ensemble Method for Estimating Individualized Treatment
+Effects, \emph{arXiv:2202.12445}.
+
+Nie & Wager (2021) Quasi-Oracle Estimation of Heterogeneous Treatment
+Effects, \emph{Biometrika} 108(2):299-319.
 }

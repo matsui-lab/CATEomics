@@ -6,65 +6,81 @@
 \usage{
 cf_select(
   compare_result,
-  metric = "r_loss",
+  metric = NULL,
   top_n = 1L,
   tie = c("report", "ignore")
 )
 }
 \arguments{
-\item{compare_result}{\code{cfomics_compare} object from
+\item{compare_result}{\code{cateomics_compare} object from
 \code{\link{cf_compare}}.}
 
-\item{metric}{Character; one of the metric columns recorded in
-\code{compare_result$scoreboard}.}
+\item{metric}{Character; the scoreboard column to select on. The default
+\code{NULL} takes the first metric the comparison ranked by
+(\code{compare_result$metadata$metric[1]}), which is \code{"r_loss"}
+unless \code{cf_compare(metric = )} said otherwise -- so a comparison run
+with one non-default metric can be handed straight to this function. Give
+it explicitly to select on another of the columns the comparison recorded:
+\code{"r_loss"}, \code{"dr_loss"}, \code{"factual_loss"} (minimised) or
+\code{"r_squared_score"}, \code{"dr_squared_score"},
+\code{"factual_squared_score"} (maximised). A column the comparison did
+not record is an error.}
 
 \item{top_n}{Integer (default \code{1L}). When greater than 1, returns
 \code{models = list(...)} with the top-N methods. \code{top_n = 1L}
 returns a single \code{model = ...} slot.}
 
 \item{tie}{One of \code{"report"} (default) or \code{"ignore"}. When
-\code{"report"}, the runner-up's between-fold CI is compared with the
-winner's; overlap sets \code{tie_detected = TRUE} and an informational
-message points to \code{cf_ensemble}.}
+\code{"report"}, the per-fold losses of the runner-up and the winner are
+differenced fold by fold and summarised by a t interval on
+\code{K - 1} degrees of freedom; an interval covering zero sets
+\code{tie_detected = TRUE} and says so. The difference is on the loss
+scale. \code{selection_stats$tie_basis} records which comparison was
+used; it is \code{NA} when the per-fold losses are unavailable, and the
+reason in words when \code{tie = "ignore"} left the question unasked.
+\code{tie_detected} is \code{NA} in both of those cases.}
 }
 \value{
-An object of class \code{c("cfomics_select", "list")} with:
+An object of class \code{c("cateomics_select", "list")} with:
   \itemize{
     \item \code{selected}: winning method name (or top-N vector);
     \item \code{model} (top_n = 1) or \code{models} (top_n > 1): the
           cached cf_compare full-data fit(s);
     \item \code{selection_stats}: list of
           \code{selected_method}, \code{metric}, \code{value},
-          \code{naive_ci}, \code{runner_up},
+          \code{between_fold_ci}, \code{runner_up},
           \code{runner_up_value},
           \code{runner_up_diff_ci},
-          \code{tie_detected}, \code{tie_method},
+          \code{tie_detected}, \code{tie_method}, \code{tie_basis},
           \code{K_candidates};
-    \item \code{top_n}, \code{metric} (for echo).
+    \item \code{metric}: the column the selection was made on. The config
+          behind a winner is that fit's \code{meta$spec}: with
+          \code{top_n = 1} that is \code{model$meta$spec}, and with
+          \code{top_n > 1} one per entry of \code{models}.
   }
 }
 \description{
-Picks the rank-1 method from a \code{\link{cf_compare}} scoreboard under
-a pre-registered metric. The selection itself is intentionally thin: it
-is simply \code{argmin} of the loss column (mirroring EconML's
-\code{RScorer.best_model}). When the runner-up's between-fold CI
-overlaps with the winner's, a \code{tie_detected} flag is set and the
-user is steered toward \code{\link{cf_ensemble}}.
+Orders the requested \code{metric} column of a \code{\link{cf_compare}}
+scoreboard itself -- \code{argmin} for a loss, \code{argmax} for a score
+-- and returns the best config. The scoreboard's own \code{rank} column
+follows \code{metric[1]}, so a different \code{metric} can pick a
+different winner. When the fold-paired difference between the
+runner-up and the winner covers zero, \code{tie_detected} records that the
+two are not separated on this metric and this split.
 
-The selection is deliberately kept simple: it is argmin of the loss
-column, without a formal post-selection-inference correction or honest
-selection CI. The
-function does \strong{not} refit; it returns the cached full-data
+The function does \strong{not} refit; it returns the cached full-data
 model that cf_compare already stored.
 }
 \section{Tie handling}{
 
-The two cfomics selection knobs are intentionally parallel:
-\code{cf_select} returns a \emph{single method}; \code{cf_ensemble}
-returns a \emph{combined tau hat}. When the runner-up's CI overlaps
-with the winner's, the spec recommends users consider
-\code{cf_ensemble} instead of forcing a single pick. The
-\code{tie_detected} flag exposes that situation.
+\code{tie_detected} marks the case where the fold-paired difference
+between the winner and the runner-up covers zero: the two are not separated
+by this metric on this split. It is \code{TRUE} then, \code{FALSE} when
+they are separated or when there is no runner-up (\code{runner_up} is then
+\code{NA}), and \code{NA} whenever the question was not asked --- which
+includes \code{tie = "ignore"}, whatever the candidates look like, and a
+comparison that kept no per-fold losses. \code{tie_basis} says which of
+those it was.
 }
 
 \examples{
@@ -73,9 +89,21 @@ se  <- cf_example_data(n = 50, p = 40, n_prog = 8, n_pred = 4, seed = 1)
 cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
                   X_baseline = c("age", "sex"),
                   methods = c("grf", "bcf"), n_features = 25,
-                  n_burn = 10L, n_iter = 10L, n_chains = 1L)
+                  params = list(bcf = list(nburn = 10L, nsim = 10L,
+                                           n_chains = 1L)))
 sel <- cf_select(cmp)
 sel$selection_stats$selected_method
+}
+\references{
+Nie & Wager (2021) Quasi-Oracle Estimation of Heterogeneous Treatment
+Effects, \emph{Biometrika} 108(2):299-319 (R-loss).
+
+Kennedy (2023) Towards optimal doubly robust estimation of heterogeneous
+causal effects, \emph{Electron. J. Stat.} 17(2):3008-3049 (DR-loss).
+
+Mahajan, Mitliagkas, Neal & Syrgkanis (2024) Empirical analysis of model
+selection for heterogeneous causal effect estimation, \emph{ICLR}
+(proxy losses for model selection).
 }
 \seealso{
 \code{\link{cf_compare}}, \code{\link{cf_ensemble}},

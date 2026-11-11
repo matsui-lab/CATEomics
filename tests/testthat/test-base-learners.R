@@ -1,6 +1,6 @@
 # Tests for the unified base learner infrastructure (.fit_base_learner /
 # .predict_base_learner). Covers:
-#   * all 5 learners x 2 types (10 smoke tests)
+#   * the learners this file exercises, for both outcome types
 #   * reproducibility via random_state
 #   * input validation
 #   * predict output shape / type
@@ -117,12 +117,12 @@ test_that("invalid learner spec errors", {
   # instead.
   expect_error(
     .fit_base_learner(d$x, d$y, type = "regression", learner = "bogus_learner"),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
   expect_error(
     .fit_base_learner(d$x, d$y, type = "regression",
                       learner = c("linear", "lasso")),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
 })
 
@@ -142,7 +142,7 @@ test_that("non-numeric x is rejected", {
   x_bad <- data.frame(a = letters[1:5], b = 1:5)
   expect_error(
     .fit_base_learner(x_bad, 1:5, type = "regression", learner = "linear"),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
 })
 
@@ -151,14 +151,14 @@ test_that("classification rejects non-0/1 numeric y", {
   y_bad <- d$y + 2L  # values in {2, 3}
   expect_error(
     .fit_base_learner(d$x, y_bad, type = "classification", learner = "lasso"),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
 })
 
 test_that("predict errors on non-cf_base_learner object", {
   expect_error(
     .predict_base_learner(list(), matrix(1:4, 2, 2)),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
 })
 
@@ -178,6 +178,6 @@ test_that("predict aligns columns by name", {
   # Missing column -> error.
   expect_error(
     .predict_base_learner(obj, d$x[, -1, drop = FALSE]),
-    class = "cfomics_base_learner_error"
+    class = "cateomics_base_learner_error"
   )
 })

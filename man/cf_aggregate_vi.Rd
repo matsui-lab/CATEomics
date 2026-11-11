@@ -9,11 +9,12 @@ cf_aggregate_vi(
   top_k = 100L,
   methods_subset = NULL,
   surrogate = c("ridge", "xgb"),
+  random_state = 0L,
   ...
 )
 }
 \arguments{
-\item{cmp}{\code{cfomics_compare} object.}
+\item{cmp}{\code{cateomics_compare} object.}
 
 \item{top_k}{Integer (default \code{100L}), top-k cutoff per method
 (sorted by SHAP importance).}
@@ -25,10 +26,25 @@ include (bare method names, or \code{method_base} in grid mode).}
 from. Defaults to \code{"ridge"}; \code{"xgb"} reads the TreeSHAP
 output instead.}
 
-\item{...}{Forwarded to \code{cf_interpret()}.}
+\item{random_state}{Integer seed (default \code{0L}). It is the seed of
+each \code{\link{cf_interpret}} fit this aggregation runs, and the value
+used is recorded in \code{metadata}.}
+
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-Object of class \code{c("cfomics_aggregate_vi", "list")}.
+Object of class \code{c("cateomics_aggregate_vi", "list")} with
+  \code{results} (the aggregated table, carrying \code{score} -- the RRA
+  p-value, so smaller means stronger agreement -- and the consensus rank)
+  and \code{metadata} (\code{method}, the configs that contributed and
+  the ones that failed, \code{top_k}, \code{surrogate} and
+  \code{random_state}). A config whose interpretation warned leaves the
+  warnings in \code{metadata$method_warnings}, and one that printed
+  something without raising a caveat leaves it in
+  \code{metadata$method_messages}: one named character vector per config,
+  the names being the condition classes and the values the messages. Both
+  are also reported once as the call returns, and both are \code{NULL}
+  when there is nothing to report.
 }
 \description{
 Cross-method aggregation of \code{cf_interpret()} surrogate-SHAP
@@ -41,8 +57,7 @@ consensus.
 
 Consensus is Robust Rank Aggregation (Kolde 2012) via
 \code{RobustRankAggreg::aggregateRanks} over the per-method
-importance-ranked feature lists -- a rank-based consensus score
-(RRA p-value), not a calibrated effect estimate.
+importance-ranked feature lists; \code{score} is its RRA p-value.
 
 When \code{cmp} was built with \code{cf_compare(base_learners = ...)},
 aggregation is over the (method x base-learner) configs (keyed by the
@@ -55,8 +70,13 @@ se  <- cf_example_data(n = 50, p = 40, n_prog = 8, n_pred = 4, seed = 1)
 cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
                   X_baseline = c("age", "sex"),
                   methods = c("grf", "bcf"), n_features = 25,
-                  n_burn = 10L, n_iter = 10L, n_chains = 1L)
+                  params = list(bcf = list(nburn = 10L, nsim = 10L,
+                                           n_chains = 1L)))
 cf_aggregate_vi(cmp, top_k = 20, surrogate = "xgb")
+}
+\references{
+Kolde, Laur, Adler & Vilo (2012) Robust rank aggregation for gene list
+integration and meta-analysis, \emph{Bioinformatics} 28(4):573-580.
 }
 \seealso{
 \code{\link{cf_interpret}}, \code{\link{cf_compare}}.

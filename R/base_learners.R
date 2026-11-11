@@ -1,18 +1,16 @@
 #' Fit a base learner
 #'
-#' Unified interface to seven base learners used across cfomics methods for
+#' Unified interface to seven base learners used across CATEomics methods for
 #' propensity score, outcome model, and final stage fits.
 #'
 #' Supported learners:
 #' * `"linear"` / `"logistic"` — aliases. Uses [stats::lm()] for regression
 #'   and [stats::glm()] with `family = binomial()` for classification.
-#' * `"lasso"` — [glmnet::cv.glmnet()] with `alpha = 1`. Default for
-#'   high-dim omics nuisance models (Chernozhukov et al. 2018 DML).
+#' * `"lasso"` — [glmnet::cv.glmnet()] with `alpha = 1`.
 #' * `"ridge"` — [glmnet::cv.glmnet()] with `alpha = 0`.
 #' * `"elastic_net"` — [glmnet::cv.glmnet()] with `alpha = 0.5`.
 #' * `"rf"` — [ranger::ranger()]; classification mode sets `probability = TRUE`.
-#' * `"xgboost"` — [xgboost::xgboost()]; requires
-#'   the `xgboost` package as Suggests dependency.
+#' * `"xgboost"` — [xgboost::xgb.train()].
 #'
 #' For the `cv.glmnet` variants, the regularisation strength is selected via
 #' `s = "lambda.min"` at prediction time.
@@ -24,11 +22,14 @@
 #'   (binary `y`).
 #' @param learner One of `"linear"`, `"logistic"`, `"lasso"`, `"ridge"`,
 #'   `"elastic_net"`, `"rf"`, `"xgboost"`.
-#' @param random_state Optional integer seed. When non-`NULL`, applied via
-#'   [set.seed()] before `cv.glmnet` fold assignment and passed as `seed =` to
-#'   `ranger`.
+#' @param random_state Optional integer seed. When non-`NULL`, pinned with
+#'   [set.seed()] before the fit, which is where the penalty CV fold
+#'   assignment, ranger and xgboost all draw from. No value is handed to
+#'   ranger, which reads `seed = 0` as "no seed".
+#' @param .params Named list of validated user hyperparameters, merged into the
+#'   arguments below.
 #' @param ... Additional arguments forwarded to the underlying fit function
-#'   (`lm`, `glm`, `cv.glmnet`, or `ranger`).
+#'   (`lm`, `glm`, `cv.glmnet`, `ranger` or `xgb.train`).
 #'
 #' @return An object of class `"cf_base_learner"` — a list with elements:
 #'   * `learner`: the learner name.
@@ -43,6 +44,7 @@
                               type = c("regression", "classification"),
                               learner = "linear",
                               random_state = NULL,
+                              .params = list(),
                               ...) {
   type <- match.arg(type)
   .validate_learner_spec(learner)
@@ -71,14 +73,19 @@
     set.seed(random_state)
   }
 
+  # `.params` carries the user hyperparameters (validated upstream); `...`
+  # keeps the internal call sites that pass arguments positionally by name.
+  extra <- c(list(...), .params %||% list())
   model <- switch(learner,
     linear       = ,
-    logistic     = .fit_linear(x_mat, y_in, type, ...),
-    lasso        = .fit_glmnet(x_mat, y_in, type, alpha = 1,   ...),
-    ridge        = .fit_glmnet(x_mat, y_in, type, alpha = 0,   ...),
-    elastic_net  = .fit_glmnet(x_mat, y_in, type, alpha = 0.5, ...),
-    rf           = .fit_ranger(x_mat, y_in, type, random_state = random_state, ...),
-    xgboost      = .fit_xgboost(x_mat, y_in, type, random_state = random_state, ...)
+    logistic     = do.call(.fit_linear, c(list(x_mat, y_in, type), extra)),
+    lasso        = do.call(.fit_glmnet, c(list(x_mat, y_in, type, alpha = 1), extra)),
+    ridge        = do.call(.fit_glmnet, c(list(x_mat, y_in, type, alpha = 0), extra)),
+    elastic_net  = do.call(.fit_glmnet, c(list(x_mat, y_in, type, alpha = 0.5), extra)),
+    rf           = do.call(.fit_ranger,
+                           c(list(x_mat, y_in, type, random_state = random_state), extra)),
+    xgboost      = do.call(.fit_xgboost,
+                           c(list(x_mat, y_in, type, random_state = random_state), extra))
   )
 
   structure(
@@ -107,7 +114,7 @@
   if (!inherits(object, "cf_base_learner")) {
     rlang::abort(
       "`object` must be a cf_base_learner produced by .fit_base_learner().",
-      class = "cfomics_base_learner_error"
+      class = "cateomics_base_learner_error"
     )
   }
   newdata_mat <- .align_newdata(newdata, object$feature_names)
@@ -123,6 +130,17 @@
   )
 }
 
+#' The pluggable base learners, named once
+#'
+#' Read by `.validate_learner_spec()` and by the comparison entry point, so a
+#' token is added in one place.
+#'
+#' @keywords internal
+#' @noRd
+.CF_BASE_LEARNERS <- c("linear", "logistic", "lasso", "ridge",
+                       "elastic_net", "rf", "xgboost")
+
+
 #' Validate a learner specification
 #'
 #' @param learner Scalar character, the learner name.
@@ -130,7 +148,7 @@
 #' @keywords internal
 #' @noRd
 .validate_learner_spec <- function(learner) {
-  valid <- c("linear", "logistic", "lasso", "ridge", "elastic_net", "rf", "xgboost")
+  valid <- .CF_BASE_LEARNERS
   if (!is.character(learner) || length(learner) != 1L || !(learner %in% valid)) {
     rlang::abort(
       sprintf(
@@ -138,7 +156,7 @@
         paste(shQuote(valid), collapse = ", "),
         paste(deparse(learner), collapse = " ")
       ),
-      class = "cfomics_base_learner_error"
+      class = "cateomics_base_learner_error"
     )
   }
   invisible(TRUE)
@@ -153,7 +171,7 @@
     if (!is.numeric(x)) {
       rlang::abort(
         "`x` must be a numeric matrix or a data.frame of numeric columns.",
-        class = "cfomics_base_learner_error"
+        class = "cateomics_base_learner_error"
       )
     }
     x_out <- x
@@ -161,14 +179,14 @@
     if (!all(vapply(x, is.numeric, logical(1)))) {
       rlang::abort(
         "All columns of `x` must be numeric.",
-        class = "cfomics_base_learner_error"
+        class = "cateomics_base_learner_error"
       )
     }
     x_out <- as.matrix(x)
   } else {
     rlang::abort(
       "`x` must be a numeric matrix or a data.frame.",
-      class = "cfomics_base_learner_error"
+      class = "cateomics_base_learner_error"
     )
   }
   if (is.null(colnames(x_out))) {
@@ -182,7 +200,7 @@
     if (!is.numeric(y)) {
       rlang::abort(
         "For regression, `y` must be a numeric vector.",
-        class = "cfomics_base_learner_error"
+        class = "cateomics_base_learner_error"
       )
     }
     return(as.numeric(y))
@@ -192,7 +210,7 @@
     if (nlevels(y) != 2L) {
       rlang::abort(
         "For classification, factor `y` must have exactly two levels.",
-        class = "cfomics_base_learner_error"
+        class = "cateomics_base_learner_error"
       )
     }
     return(as.numeric(y) - 1L)
@@ -201,7 +219,7 @@
   if (any(is.na(y_num)) || !all(y_num %in% c(0, 1))) {
     rlang::abort(
       "For classification, `y` must be a 0/1 vector or a two-level factor.",
-      class = "cfomics_base_learner_error"
+      class = "cateomics_base_learner_error"
     )
   }
   y_num
@@ -217,7 +235,7 @@
     rlang::abort(
       sprintf("`newdata` is missing columns: %s",
               paste(shQuote(missing), collapse = ", ")),
-      class = "cfomics_base_learner_error"
+      class = "cateomics_base_learner_error"
     )
   }
   nd[, feature_names, drop = FALSE]
@@ -248,19 +266,62 @@
 
 .fit_glmnet <- function(x, y, type, alpha, ...) {
   # cv.glmnet requires at least 2 columns. Fall back to linear/logistic for
-  # single-covariate inputs (typically toy / contract tests). This preserves
-  # the user-facing default `"lasso"` for high-dim omics while still working
-  # on degenerate-dim test data.
+  # single-covariate inputs (typically toy / contract tests), so a penalised
+  # token still runs on a degenerate design.
   if (ncol(x) < 2L) {
     return(.fit_linear(x, y, type, ...))
   }
   family <- if (type == "regression") "gaussian" else "binomial"
-  # X is standardised centrally in `.cf_preprocess_input` (continuous columns
-  # z-scored, binary/one-hot kept native). Disable glmnet's internal
-  # standardisation so it does not re-standardise the binary indicators;
-  # continuous columns already have unit scale.
-  glmnet::cv.glmnet(x = x, y = y, alpha = alpha, family = family,
-                    standardize = FALSE, ...)
+  # The fold count is this package's, not glmnet's default of 10, so that
+  # every penalty selection that forms a split -- here, in the Python factory,
+  # and for the ridge surrogate -- is split the same number of ways and one
+  # threshold describes all of them. The exception is a continuous target in
+  # the Python factory, where `"ridge"` is a closed-form leave-one-out and
+  # forms no split. A caller's own `nfolds` still wins.
+  dots <- list(...)
+  nfolds <- as.integer(dots$nfolds %||% .CF_CV_FOLDS)
+  dots$nfolds <- nfolds
+  # Checked on the rows actually in hand, so no nesting arithmetic is needed:
+  # whatever splits sit above this call have already been applied. glmnet
+  # returns a fit on a continuous target without stopping or warning however
+  # few rows it has, so the rule the Python side is pre-flighted against is
+  # applied here too.
+  role <- switch(as.character(alpha), "1" = "lasso", "0" = "ridge", "elastic_net")
+  if (identical(family, "binomial")) {
+    .cf_check_cv_split(min(as.integer(table(y[!is.na(y)]))), role,
+                       what = "class", cv_folds = nfolds)
+  } else {
+    .cf_check_cv_split(nrow(x), role, what = "rows", cv_folds = nfolds)
+  }
+  # X is standardised centrally in `.cf_preprocess_input` (every column,
+  # binary indicators included). Disable glmnet's internal standardisation so the
+  # scale the caller sees is the one the penalty acts on.
+  # cv.glmnet can still stop for reasons this package does not model -- a
+  # degenerate design, a class that vanishes inside its own split -- with an
+  # unclassed message that does not say what the caller has to change, so the
+  # counts CATEomics is holding are reported alongside the original text.
+  tryCatch(
+    do.call(glmnet::cv.glmnet,
+            c(list(x = x, y = y, alpha = alpha, family = family,
+                   standardize = FALSE), dots)),
+    error = function(e) {
+      cnt <- if (identical(family, "binomial")) {
+        tb <- table(as.integer(y))
+        sprintf("%d rows, class counts %s", length(y),
+                paste(sprintf("%s=%d", names(tb), as.integer(tb)), collapse = "/"))
+      } else {
+        sprintf("%d rows", length(y))
+      }
+      rlang::abort(
+        c(sprintf("glmnet could not cross-validate the penalty on this fit (%s).", cnt),
+          i = sprintf("It splits internally into %d folds; that many rows of each class are not there.",
+                      nfolds),
+          i = "Raise the rows available, or name a learner that does not cross-validate.",
+          x = sprintf("glmnet: %s", sub("\n.*", "", conditionMessage(e)))),
+        class = "cateomics_glmnet_cv_failed"
+      )
+    }
+  )
 }
 
 .predict_glmnet <- function(model, newdata, type) {
@@ -283,9 +344,13 @@
     args$y <- factor(y, levels = c(0, 1))
     args$probability <- TRUE
   }
-  if (!is.null(random_state) && is.null(args$seed)) {
-    args$seed <- as.integer(random_state)
-  }
+  # ranger reads `seed = 0` as "no seed" and draws one from R's RNG, so the
+  # package-wide default of 0 left this learner -- and with it the default
+  # evaluation nuisance -- following whatever state the caller was in. grf and
+  # bcf are seeded the other way round: CATEomics pins R's RNG and lets the
+  # backend draw its own seed from it. `.fit_base_learner()` has already
+  # pinned it, so nothing is passed down and 0 becomes an ordinary value,
+  # while a user's own `seed` still wins.
   do.call(ranger::ranger, args)
 }
 
@@ -307,19 +372,43 @@
 # ---- xgboost --------------------------------------------------------------
 
 .fit_xgboost <- function(x, y, type, random_state = NULL, ...) {
+  # xgboost is an Import since the default evaluation nuisance library carries
+  # two boosted members, so this cannot fire through the package's own entry
+  # points. Kept as a guard for a caller that reaches the fitter with the
+  # namespace unavailable.
   if (!requireNamespace("xgboost", quietly = TRUE)) {
     rlang::abort(
       c("Package 'xgboost' is required for learner = 'xgboost'.",
         i = "Install with: install.packages('xgboost')"),
-      class = "cfomics_xgboost_missing"
+      class = "cateomics_xgboost_missing"
     )
   }
   args <- list(...)
-  # Sensible cfomics defaults (light to avoid GPU/long-running fits in CI).
-  # Use xgboost >= 3.x parameter names (`x`, `y`, `learning_rate`).
+  # CATEomics defaults. The sklearn-wrapper spellings (`learning_rate` and so
+  # on) are accepted alongside the native ones.
+  # nrounds 100 / max_depth 4 / eta 0.1 / min_child_weight 10 /
+  # colsample_bytree 0.5. The three middle values are the ones
+  # SuperLearner::SL.xgboost uses.
+  # `eta` is xgboost's own spelling of `learning_rate`, and the allow-list
+  # accepts it because xgb.params() lists it. Resolved here, before the
+  # extraction below: left in `args` it would reach the same booster list as
+  # the `learning_rate` written there, where `learning_rate` wins whichever
+  # comes first, so a validated hyperparameter was silently replaced by the
+  # default.
+  if ("eta" %in% names(args)) {
+    if ("learning_rate" %in% names(args)) {
+      rlang::abort(
+        c("`eta` and `learning_rate` are the same booster setting.",
+          i = "Pass one of them."),
+        class = "cateomics_duplicate_param"
+      )
+    }
+    args$learning_rate <- args$eta
+    args$eta <- NULL
+  }
   nrounds       <- if (is.null(args$nrounds)) 100L else args$nrounds
-  max_depth     <- if (is.null(args$max_depth)) 6L else args$max_depth
-  learning_rate <- if (is.null(args$learning_rate)) 0.3 else args$learning_rate
+  max_depth     <- if (is.null(args$max_depth)) 4L else args$max_depth
+  learning_rate <- if (is.null(args$learning_rate)) 0.1 else args$learning_rate
   args$nrounds       <- NULL
   args$max_depth     <- NULL
   args$learning_rate <- NULL
@@ -332,16 +421,27 @@
   } else {
     objective <- "binary:logistic"
   }
+  # Split what the caller passed: xgb.train takes a handful of arguments
+  # itself and reads every booster hyperparameter out of `params`. Spreading
+  # them all at the top level made xgboost warn ("These should be passed as a
+  # list to argument 'params'") and is documented upstream to become an error.
+  top_lvl  <- intersect(names(args), names(formals(xgboost::xgb.train)))
+  train_as <- args[top_lvl]
+  booster  <- utils::modifyList(
+    list(objective        = objective,
+         max_depth        = as.integer(max_depth),
+         learning_rate    = as.numeric(learning_rate),
+         min_child_weight = 10L,
+         colsample_bytree = 0.5,
+         verbosity        = 0L),
+    args[setdiff(names(args), top_lvl)])
   do.call(xgboost::xgb.train, c(
     list(
-      params = list(objective = objective,
-                    max_depth = as.integer(max_depth),
-                    learning_rate = as.numeric(learning_rate),
-                    verbosity = 0L),
-      data = xgboost::xgb.DMatrix(data = as.matrix(x), label = as.numeric(y)),
+      params  = booster,
+      data    = xgboost::xgb.DMatrix(data = as.matrix(x), label = as.numeric(y)),
       nrounds = as.integer(nrounds)
     ),
-    args
+    train_as
   ))
 }
 
@@ -352,34 +452,24 @@
 
 # ---- central covariate z-score helpers ------------------------------------
 #
-# cfomics ships omics covariates on heterogeneous scales (gene expression vs.
+# CATEomics ships omics covariates on heterogeneous scales (gene expression vs.
 # clinical variables). `.cf_preprocess_input` standardises the assembled X once
 # (before fold splitting / dispatch) via these helpers so every scale-sensitive
 # backend (base learners, catenets, ganite, cevae) sees a common representation
-# and regularisation is not biased toward large-magnitude features. Binary /
-# one-hot columns are kept on their native scale; glmnet is called with
+# and regularisation is not biased toward large-magnitude features. Every
+# column is standardised, binary indicators included; glmnet is called with
 # `standardize = FALSE` since standardisation is handled here.
-
-
-#' Detect binary / one-hot columns of a numeric matrix (<= 2 distinct finite
-#' values). Used by the central X z-score to keep such columns native (mean 0,
-#' sd 1 skipped).
-#' @keywords internal
-#' @noRd
-.cfomics_binary_cols <- function(x) {
-  apply(x, 2L, function(col) {
-    length(unique(col[is.finite(col)])) <= 2L
-  })
-}
 
 
 #' Compute central covariate z-score statistics (column mean / sd).
 #'
-#' Binary / one-hot columns (<= 2 distinct finite values, [[.cfomics_binary_cols]])
-#' are left on their native scale (mean 0, sd 1) so 0/1 indicators keep their
-#' encoding instead of being standardised. Constant columns (sd 0 / non-finite)
-#' also fall back to sd 1. Uses only X (no outcome), so it is a leakage-free
-#' covariate transform and can be computed once on the full training matrix.
+#' Every column is standardised, binary indicators included: a penalised
+#' learner shrinks a narrow column harder than a wide one, and 0/1 columns are
+#' narrower than z-scored continuous ones. Neither the R learners
+#' (glmnet runs with standardize = FALSE) nor the Python ones standardise
+#' internally, so this is the only place it happens. Constant columns (sd 0 or
+#' non-finite) fall back to sd 1. Uses only X, so it is leakage-free and is
+#' computed once on the full training matrix.
 #' @keywords internal
 #' @noRd
 .cf_compute_x_zscore <- function(X) {
@@ -387,9 +477,6 @@
   storage.mode(X) <- "double"
   X_mean <- colMeans(X, na.rm = TRUE)
   X_sd   <- apply(X, 2L, stats::sd, na.rm = TRUE)
-  is_bin <- if (ncol(X) > 0L) .cfomics_binary_cols(X) else logical(0)
-  X_mean[is_bin] <- 0
-  X_sd[is_bin]   <- 1
   X_sd[!is.finite(X_sd) | X_sd == 0] <- 1
   list(X_mean = X_mean, X_sd = X_sd)
 }

@@ -8,76 +8,65 @@ cf_model_stability(
   compare_result,
   cor_methods = c("pearson", "spearman", "kendall"),
   primary_cor = "spearman",
-  benefit_top_q = 0.2,
-  outlier_mad = 2,
   ...
 )
 }
 \arguments{
-\item{compare_result}{A \code{cfomics_compare} object.}
+\item{compare_result}{A \code{cateomics_compare} object.}
 
 \item{cor_methods}{Character vector of correlation methods to compute;
-any subset of \code{c("pearson", "spearman", "kendall")}.}
+any subset of \code{c("pearson", "spearman", "kendall")}, all three by
+default. \code{primary_cor} is appended when it is not among them,
+since the summary reads it.}
 
-\item{primary_cor}{The correlation method whose K-vector of mean
-off-diagonals drives the outlier flag and the summary statistics.}
+\item{primary_cor}{The correlation method (default \code{"spearman"})
+whose K-vector of mean off-diagonals is reported per method.}
 
-\item{benefit_top_q}{Numeric in (0, 0.5]; quantile threshold for the
-top-q high-benefit set definition (default 0.2 = top 20\% by tau hat).}
-
-\item{outlier_mad}{Numeric; an outlier method is one whose mean
-off-diagonal correlation is below the median minus \code{outlier_mad}
-times the MAD of mean correlations.}
-
-\item{...}{Currently unused.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-An object of class \code{c("cfomics_model_stability", "list")}
+An object of class \code{c("cateomics_model_stability", "list")}
   with:
   \itemize{
     \item \code{cor_matrices}: named list of K x K correlation matrices,
           one per requested correlation method;
-    \item \code{benefit_group_jaccard}: K x K matrix of top-q high-benefit Jaccard
-          values;
     \item \code{per_method_tau_correlation}: numeric K-vector of mean
           off-diagonal correlations (primary);
-    \item \code{outlier_methods}: character vector flagged as outliers
-          (median - outlier_mad x MAD);
-    \item \code{summary}: list with \code{median_agreement},
-          \code{min_agreement}, \code{mean_agreement},
-          \code{n_outliers}, \code{n_methods}, \code{n_rows};
-    \item \code{meta}: methods_used, methods_dropped, primary_cor,
-          benefit_top_q, outlier_mad.
+    \item \code{meta}: \code{methods_used}, \code{methods_dropped},
+          \code{primary_cor}, \code{n_rows}, \code{n_rows_dropped},
+          \code{n_folds}. The number of methods is
+          \code{length(methods_used)} and the correlation methods computed
+          are \code{names(cor_matrices)}.
   }
 }
 \description{
-\code{cf_model_stability()} summarises how much the per-method OOF tau
-hats agree with each other. It is a \strong{descriptive} diagnostic, not
-a validation tool: the output must not be used as a model-selection
-criterion.
+\code{cf_model_stability()} asks how much the candidates of a comparison
+order the samples the same way. It reads one thing, the K columns of
+out-of-fold tau-hat, and reports the correlation between every pair of
+methods -- so a high value says the methods rank the samples alike, not
+that any of them is right.
 }
 \details{
-Three families of agreement are reported:
-
 \itemize{
   \item Pairwise correlation matrices (Pearson, Spearman, Kendall) over
         the K cleaned methods. Spearman is the primary rank-based
-        measure; Kendall mirrors what \code{cf_ensemble(method = "cba")}
-        uses internally so the two stay consistent.
-  \item Top-q high-benefit-set Jaccard index between every pair of methods.
-  \item Mean off-diagonal correlation per method (primary correlation)
-        and a heuristic flag for outlier methods (mean agreement below
-        the cohort median by more than one MAD).
-}
-}
-\section{Use}{
-
-Treat the output as descriptive; do not use it for model selection.
-The intended uses are (a) flagging an outlier
-method for investigation and (b) gauging how sensitive a downstream
-claim is to estimator choice.
+        measure; \code{cf_ensemble(method = "cba")} defaults to Kendall.
+  \item The mean off-diagonal of the primary matrix for each method: how
+        much that method agrees with the rest of the cohort.
 }
 
+Which samples each method would call high-benefit is the question
+\code{\link{cf_benefit_groups}} answers, per sample and for the split that
+was reported; this function stays at the level of methods.
+
+
+Every reported quantity is a correlation between two methods, so at least
+two of the compared methods must carry usable out-of-fold tau-hat. A
+comparison that leaves one is refused with
+\code{cateomics_stability_single_method}, and one that leaves none with
+\code{cateomics_stability_empty_input}; methods whose fit failed are listed
+in \code{cf_compare()}'s \code{metadata$failed_methods}.
+}
 \examples{
 # Two R-native CATE methods (grf + a short-MCMC bcf) so agreement is
 # non-degenerate; known randomised propensity. Runs without Python.
@@ -85,8 +74,11 @@ se  <- cf_example_data(n = 50, p = 40, n_prog = 8, n_pred = 4, seed = 1)
 cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
                   X_baseline = c("age", "sex"),
                   methods = c("grf", "bcf"), n_features = 25,
-                  n_burn = 10L, n_iter = 10L, n_chains = 1L,  # 1 chain keeps bcf fast
-                  propensity_score = 0.5, random_state = 1)
+                  # 1 chain keeps bcf fast
+                  params = list(bcf = list(nburn = 10L, nsim = 10L,
+                                           n_chains = 1L)),
+                  propensity_score = 0.5, eval_propensity_score = 0.5,
+                  random_state = 1)
 cf_model_stability(cmp)
 
 }

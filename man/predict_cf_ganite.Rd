@@ -7,7 +7,7 @@
 predict_cf_ganite(
   object,
   newdata = NULL,
-  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "summary"),
+  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "ps", "summary"),
   ...
 )
 }
@@ -18,8 +18,11 @@ predict_cf_ganite(
 same column order/dimensionality as the training \code{X}. If
 \code{NULL}, returns in-sample estimates.}
 
-\item{type}{One of \code{"ate"}, \code{"tau"}, \code{"mu0"}, \code{"mu1"},
-\code{"summary"}.}
+\item{type}{One of \code{"all"}, \code{"ate"}, \code{"ate_ci"},
+\code{"tau"}, \code{"tau_ci"}, \code{"mu0"}, \code{"mu1"},
+\code{"ps"}, \code{"summary"}. GANITE estimates no propensity score, so
+\code{"ps"} is \code{NA}; the interval types are unavailable with
+\code{newdata}.}
 
 \item{...}{Unused.}
 }

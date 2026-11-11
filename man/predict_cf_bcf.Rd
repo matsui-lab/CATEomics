@@ -13,20 +13,26 @@ predict_cf_bcf(object, newdata = NULL, pihat_new = NULL, type = "all", ...)
 returns in-sample estimates.}
 
 \item{pihat_new}{Numeric vector of propensity scores for \code{newdata}.
-Required when \code{newdata} is given.}
+Optional: when omitted it is recomputed from the propensity model the fit
+persisted, or reused when the fit was given a constant known score. It is
+required only when the fit was given a per-sample known score
+(\code{cateomics_bcf_newdata_no_ps}).}
 
-\item{type}{Type of prediction: "ate", "tau", "mu0", "mu1", "summary"}
+\item{type}{One of \code{"all"} (the default), \code{"ate"},
+\code{"ate_ci"}, \code{"tau"}, \code{"tau_ci"}, \code{"mu0"},
+\code{"mu1"}, \code{"ps"}, \code{"summary"}.}
 
-\item{...}{Additional arguments forwarded to \code{bcf::predict()}}
+\item{...}{Additional arguments forwarded to \code{bcf}'s predict
+method}
 }
 \value{
 Predicted values
 }
 \description{
 Supports both in-sample prediction (\code{newdata = NULL}) and
-out-of-sample prediction via \code{bcf::predict()} on the saved tree
-samples. Out-of-sample prediction requires that the fit was performed
-with a persistent \code{save_tree_directory} and that the user supplies
-\code{pihat_new} for the new sample.
+out-of-sample prediction through \code{bcf}'s predict method
+(\code{bcf:::predict.bcf}, reached by S3 dispatch) on the saved tree
+samples. Out-of-sample prediction requires that the fit was performed with
+a persistent \code{save_tree_directory}.
 }
 \keyword{internal}

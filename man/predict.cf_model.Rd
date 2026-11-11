@@ -7,7 +7,7 @@
 \method{predict}{cf_model}(
   object,
   newdata = NULL,
-  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "summary"),
+  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "ps", "summary"),
   ...
 )
 }
@@ -16,10 +16,13 @@
 
 \item{newdata}{Optional new covariate matrix / data.frame. When
 \code{NULL} (default), the training-sample predictions stored in
-\code{object$res} are returned.}
+\code{object$res} are returned. It must carry every omics feature the
+fit used, not only the selected ones: the library size, the batch means
+and the pathway ranks are taken over the features present, so a missing
+one moves the rest. A missing feature is an error.}
 
 \item{type}{One of \code{"all"} (default), \code{"ate"}, \code{"ate_ci"},
-\code{"tau"}, \code{"tau_ci"}, \code{"mu0"}, \code{"mu1"},
+\code{"tau"}, \code{"tau_ci"}, \code{"mu0"}, \code{"mu1"}, \code{"ps"},
 \code{"summary"}.}
 
 \item{...}{Additional arguments forwarded to the per-method predict handler.}
@@ -28,16 +31,27 @@
 Depending on \code{type}:
 \describe{
   \item{\code{"all"}}{named list \code{$ate / $ate_ci / $tau_hat / $tau_ci /
-    $mu0_hat / $mu1_hat}, with \code{NA_real_} for unsupported fields.}
+    $mu0_hat / $mu1_hat / $ps / $ps_type}. A per-row quantity the fitted
+    method does not produce is \code{NA_real_}; an interval that was not
+    computed is \code{NULL}, so the element is absent from the list.}
   \item{\code{"ate"}}{numeric scalar.}
-  \item{\code{"ate_ci"}}{\code{c(lower, upper)} numeric or
-    \code{NA_real_}.}
+  \item{\code{"ate_ci"}}{\code{c(lower, upper)} numeric, or \code{NULL}
+    when no interval was computed.}
   \item{\code{"tau"}}{numeric vector of \eqn{\hat\tau} of length
     \code{n_new} or \code{n}.}
   \item{\code{"tau_ci"}}{\code{data.frame(lower, upper)} of \code{n_new}
-    rows or \code{NA_real_}.}
+    rows, or \code{NULL} when no interval was computed.}
   \item{\code{"mu0"}, \code{"mu1"}}{numeric vectors of potential outcomes.}
-  \item{\code{"summary"}}{stored summary list (newdata not supported).}
+  \item{\code{"ps"}}{numeric vector of propensity scores, or
+    \code{NA_real_} for methods that estimate none (slearner, tlearner,
+    tarnet, dragonnet, cevae, ganite). \code{$ps_type} in the \code{"all"} list records
+    where the scores come from: \code{"oof"} (assembled from the held-out
+    fold predictions), \code{"oob"}, \code{"cross-fit (approx)"}
+    (averaged over the cross-fit propensity models),
+    \code{"in-sample"}, \code{"out-of-sample"} or \code{"known"}
+    (supplied via \code{propensity_score}).}
+  \item{\code{"summary"}}{stored summary list; naming \code{newdata}
+    together with this type is an error.}
 }
 }
 \description{
@@ -46,12 +60,23 @@ Unified \code{predict} API.
 When \code{newdata} is supplied, the cf_model is dispatched to its
 method-specific predictor with a uniform set of types. \code{type = "all"}
 returns a flat named list of \code{ate / ate_ci / tau_hat / tau_ci /
-mu0_hat / mu1_hat}; individual elements may be \code{NA_real_} when not
-supported (e.g. CIs on methods without inference). When \code{newdata =
-NULL}, the stored training-sample fields in \code{object$res} are returned.
+mu0_hat / mu1_hat / ps / ps_type}. A per-row quantity a method does not
+produce is \code{NA_real_}; an interval it does not compute is
+\code{NULL}. When \code{newdata = NULL}, the stored training-sample fields
+in \code{object$res} are returned as they are, so an absent interval is
+\code{NULL} there too.
 
-Ensemble objects from \code{\link{cf_ensemble}} hold no single backend, so
-\code{newdata} prediction is unsupported; \code{predict()} with no
+Ensemble objects from \code{\link{cf_ensemble}} hold no backend of their
+own. With \code{newdata} they score each weighted member and combine the
+member effects with the stored weights; a member that cannot score
+\code{newdata} is dropped with a warning and its weight is spread over the
+rest. \code{mu0_hat} / \code{mu1_hat} / \code{ps} are \code{NA} on
+\code{newdata}: in-sample the counterfactual means come from the shared
+evaluation nuisance, which is stored as out-of-fold prediction vectors and
+so has no value for rows it was not fitted on. The propensity is \code{NA}
+either way, because an ensemble's \code{res} carries none; the shared
+nuisance's propensity is in \code{res$nuisance$pi_oof}, which is what
+\code{\link{cf_diagnostics}} reads. \code{predict()} with no
 \code{newdata} returns the stored ensemble (OOF) tau.
 }
 \section{Method-class behaviour with newdata}{
@@ -62,15 +87,27 @@ Ensemble objects from \code{\link{cf_ensemble}} hold no single backend, so
     all of \code{tau / mu0 / mu1 / ate} are produced.
   }
   \item{Class B' (intermediate nuisance, 2 methods)}{
-    drlearner / xlearner — produce all four fields but
-    \code{mu1 - mu0 != tau} by design (Neyman-orthogonal CATE final
-    stage / propensity-weighted Stage-3 blend).
+    drlearner / xlearner — produce all four fields, and
+    \code{mu1 - mu0} does not equal \code{tau}: tau comes from the
+    orthogonal final stage (drlearner) or the propensity-weighted
+    Stage-3 blend (xlearner), not from the difference of the two means.
   }
   \item{Class C (Robinson residualisation, 1 method)}{
     grf reconstructs \code{mu0 = Y.hat - W.hat * tau, mu1 = Y.hat +
     (1 - W.hat) * tau}.
   }
 }
+}
+
+\section{The estimate a fitted model carries}{
+
+\code{res$tau_hat} is what the fit predicts for the rows it was given, and
+\code{res$tau_hat_oof} is what models fitted without each row predict for
+it; the comparison, the selection and every downstream function read the
+second. For \code{grf}, \code{res$tau_hat} holds out-of-bag predictions,
+made with the trees that did not use that row, so handing the same rows
+back as \code{newdata} returns the whole forest's prediction instead and
+the two differ. For every other method they are the same numbers.
 }
 
 \examples{

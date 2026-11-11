@@ -22,7 +22,7 @@ cf_fit_cevae(
   learning_rate_decay = 0.1,
   weight_decay = 1e-04,
   device = "cpu",
-  ...
+  params = list()
 )
 }
 \arguments{
@@ -37,8 +37,8 @@ cf_fit_cevae(
 \item{random_state}{Integer random seed. When set, yields bit-identical
 results across runs with the same inputs (constructor-time weight
 initialization is seeded too, so re-fits match). Seeding runs inside the
-ephemeral basilisk worker process, so it does not leak into the user's
-session.}
+basilisk worker; \code{.cf_py_run()} restores the Python-side generators
+afterwards, so the seeding does not leak into the user's session.}
 
 \item{outcome_dist}{Outcome distribution: \code{"normal"} (default, for
 continuous Y) or \code{"bernoulli"}. The default is \code{"normal"} because
@@ -47,6 +47,9 @@ the primary target is continuous omics outcomes. For a binary outcome use
 which drives the full binary path (Bernoulli likelihood on the raw 0/1
 scale with the Y z-score skipped); setting \code{outcome_dist} alone does
 not switch off the Y z-score.}
+
+\item{binary_outcome}{Logical; when \code{TRUE} the outcome is treated as
+a class label and the effect is a risk difference.}
 
 \item{latent_dim}{Integer latent dimension (default 20).}
 
@@ -63,12 +66,23 @@ estimate y0/y1 (default 100, the Pyro CEVAE default).}
 
 \item{learning_rate}{Numeric learning rate (default 1e-3).}
 
-\item{...}{Additional arguments forwarded to Pyro (currently ignored).}
+\item{learning_rate_decay}{Numeric multiplicative decay applied to the
+learning rate.}
+
+\item{weight_decay}{Numeric weight decay (L2) for the optimiser.}
+
+\item{device}{Character, \code{"auto"} / \code{"cpu"} / \code{"gpu"}.}
+
+\item{params}{Named list of additional hyperparameters, split by name:
+the ones that appear in the \code{CEVAEExtended} constructor go there and
+the rest go to its \code{fit()} call. CATEomics does not check them here,
+so an unknown name raises from pyro / torch.}
 }
 \value{
 A \code{cf_model_cevae} list (internal use) with components
-  \code{model} (the Python \code{CEVAEExtended} instance) and \code{res}
-  (the result payload conforming to the \code{cfomics_result} contract).
+  \code{model} (the path the trained model was serialised to, and the
+  backend name) and \code{res}
+  (the result payload conforming to the \code{cateomics_result} contract).
 }
 \description{
 Internal functions for the CEVAE (Causal Effect Variational
@@ -78,23 +92,26 @@ Internal functions for the CEVAE (Causal Effect Variational
   obtain per-sample \eqn{\hat y_0}, \eqn{\hat y_1} (which the upstream
   \code{ite()} method hides behind a single difference).
 
-Reference: Christos Louizos, Uri Shalit, Joris Mooij, David Sontag, Richard
-  Zemel, Max Welling, "Causal Effect Inference with Deep Latent-Variable
-  Models", NeurIPS 2017. \url{https://arxiv.org/abs/1705.08821}
+  The method is that of Louizos et al. (2017); see the references below.
 
-Normalization: X is z-scored centrally by cfomics preprocessing (binary /
-  one-hot columns skipped); the Pyro CEVAE PreWhitener is disabled to avoid
-  double standardization. Y is z-scored internally and predictions are
+Normalization: X is z-scored centrally by CATEomics preprocessing (every
+  column, binary indicators included); the Pyro CEVAE PreWhitener is
+  disabled to avoid double standardization. Y is z-scored internally and predictions are
   returned on the original Y scale.
 
 Covariate distribution: the generative model treats \strong{every}
   covariate as continuous Gaussian, i.e. \eqn{p(x_j \mid z) =
   \mathcal{N}(\mu_j(z), \sigma_j(z))} for all \eqn{j} (Pyro's
   \code{Model.x_nn = DiagNormalNet}). Binary / one-hot covariates are
-  therefore modelled as Gaussian rather than Bernoulli, a mild and common
-  VAE misspecification. If exact binary-covariate likelihoods matter for
-  your analysis, prefer a method without this assumption (e.g. \code{grf},
-  the meta-learners, or \code{tarnet}).
+  therefore modelled as Gaussian rather than Bernoulli.
 Fit CEVAE (Causal Effect Variational Autoencoder) model via Pyro
+}
+\references{
+Louizos, Shalit, Mooij, Sontag, Zemel & Welling (2017) Causal effect
+inference with deep latent-variable models, \emph{NeurIPS} 30:6446-6456.
+
+Bingham, Chen, Jankowiak, Obermeyer, Pradhan, Karaletsos, Singh, Szerlip,
+Horsfall & Goodman (2019) Pyro: Deep Universal Probabilistic Programming,
+\emph{JMLR} 20(28):1-6 (implementation).
 }
 \keyword{internal}

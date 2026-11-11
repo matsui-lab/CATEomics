@@ -11,16 +11,20 @@ cf_plot_cate(fit, bins = 30L, ...)
 
 \item{bins}{Integer; number of histogram bins (default \code{30}).}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
 A ggplot object (histogram of predicted CATE), or \code{NULL}
   invisibly if no per-sample effects are available.
+
+  The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+  themes or scales to it restyles the panel. The single colours are set as
+  constants rather than mapped, so a colour scale added afterwards does not
+  reach them.
 }
 \description{
-Histogram of the in-sample predicted conditional average treatment effects
-from a \code{cf_model} -- a quick look at how much treatment-effect
-heterogeneity the model found.
+Histogram of the tau-hat the fit carries. An ensemble has no in-sample
+estimate, so its out-of-fold one is shown.
 }
 \examples{
 # Distribution of estimated CATE from a fast R-native causal forest.

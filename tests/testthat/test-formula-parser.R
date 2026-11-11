@@ -32,13 +32,16 @@ test_that("Y ~ T | X1 (single covariate) parses correctly", {
   expect_equal(ncol(p$X), 1L)
 })
 
-test_that("formulas without `|` are rejected (bug repro)", {
+test_that("formulas without `|` are rejected", {
   dat <- make_dat()
-  # The pre-v0.5 parser silently took T as the first RHS var and X1+X2 as
-  # covariates; under v0.5 this is an explicit error.
+  # A one-part formula has no place to say which variable is the treatment, so
+  # it is refused. Assert the class, not the
+  # wording: the two-part formula is built internally now, so this guard
+  # protects an invariant rather than instructing a caller, and its text is
+  # free to say so.
   expect_error(
     parse_cf_formula(Y ~ T + X1 + X2, dat),
-    "two-part formula"
+    class = "cateomics_formula_rhs_missing"
   )
 })
 
@@ -66,6 +69,6 @@ test_that("three-part formula `Y ~ T | X | Z` is rejected", {
   dat <- make_dat()
   expect_error(
     parse_cf_formula(Y ~ T | X1 | Z, dat),
-    "exactly two RHS parts"
+    class = "cateomics_formula_rhs_extra"
   )
 })

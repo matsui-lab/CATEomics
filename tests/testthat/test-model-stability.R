@@ -1,10 +1,8 @@
 # Smoke tests for cf_model_stability + cf_plot_stability.
 # Goals (smoke only):
 #   - 3 correlation matrices (Pearson / Spearman / Kendall)
-#   - Jaccard high-benefit matrix
-#   - per-method agreement vector
-#   - outlier detection (descriptive)
-#   - cf_plot_stability 3 plot types render without error
+#   - per-method mean tau correlation vector
+#   - cf_plot_stability renders for each correlation method
 
 set.seed(2026)
 .make_mock_compare_stability <- function(n = 60L, K = 5L,
@@ -36,7 +34,7 @@ set.seed(2026)
         oof_tau_matrix = tau_mat
       )
     ),
-    class = c("cfomics_compare", "list")
+    class = c("cateomics_compare", "list")
   )
 }
 
@@ -47,10 +45,15 @@ test_that("cf_model_stability returns the expected list shape", {
   cmp <- .make_mock_compare_stability(n = 50L, K = 4L)
   out <- suppressMessages(cf_model_stability(cmp))
 
-  expect_s3_class(out, "cfomics_model_stability")
-  expect_true(all(c("cor_matrices", "benefit_group_jaccard",
-                    "per_method_tau_correlation", "outlier_methods",
-                    "summary", "meta") %in% names(out)))
+  expect_s3_class(out, "cateomics_model_stability")
+  # One thing is read (the K columns of out-of-fold tau-hat) and the
+  # correlations between them are reported; which samples each method would
+  # call high-benefit is cf_benefit_groups' question.
+  expect_setequal(names(out),
+                  c("cor_matrices", "per_method_tau_correlation", "meta"))
+  expect_null(out[["benefit_group_jaccard"]])
+  expect_null(out[["outlier_methods"]])
+  expect_null(out[["summary"]])
 
   # 3 cor matrices requested by default.
   expect_setequal(names(out$cor_matrices),
@@ -60,35 +63,30 @@ test_that("cf_model_stability returns the expected list shape", {
     expect_true(all(abs(diag(out$cor_matrices[[cm]]) - 1) < 1e-12))
   }
 
-  expect_equal(dim(out$benefit_group_jaccard), c(4L, 4L))
-  expect_true(all(abs(diag(out$benefit_group_jaccard) - 1) < 1e-12))
-
   expect_equal(length(out$per_method_tau_correlation), 4L)
-  expect_true(all(out$summary$n_methods == 4L))
+  # The counts sit with the other settings; the aggregates are computed where
+  # they are shown.
+  expect_identical(length(out$meta$methods_used), 4L)
+  expect_identical(out$meta$n_rows, 50L)
+  expect_null(out$meta$cor_methods)   # = names(cor_matrices)
+  expect_null(out$meta$benefit_top_q)
+  expect_null(out$meta$outlier_mad)
+  # The arguments behind the removed quantities are gone too.
+  expect_error(suppressMessages(cf_model_stability(cmp, benefit_top_q = 0.25)),
+               class = "cateomics_unknown_argument")
+  expect_error(suppressMessages(cf_model_stability(cmp, outlier_mad = 2)),
+               class = "cateomics_unknown_argument")
 })
 
 
-test_that("cf_model_stability respects benefit_top_q bounds", {
-  cmp <- .make_mock_compare_stability(n = 50L, K = 3L)
-  expect_error(
-    suppressMessages(cf_model_stability(cmp, benefit_top_q = 0)),
-    class = "cfomics_stability_invalid_top_q"
-  )
-  expect_error(
-    suppressMessages(cf_model_stability(cmp, benefit_top_q = 0.8)),
-    class = "cfomics_stability_invalid_top_q"
-  )
-})
-
-
-# Outlier detection (descriptive) ------------------------------------------
-
-test_that("cf_model_stability flags an obviously-uncorrelated method", {
+test_that("the least agreeing method has the lowest mean tau correlation", {
   cmp <- .make_mock_compare_stability(n = 80L, K = 5L,
                                        include_outlier = TRUE)
-  out <- suppressMessages(cf_model_stability(cmp, outlier_mad = 0.5))
-  # m5 is the noise column; should be flagged as outlier.
-  expect_true("m5" %in% out$outlier_methods)
+  out <- suppressMessages(cf_model_stability(cmp))
+  # m5 is the noise column. The vector says so; the function does not decide
+  # for the reader where the cut between "agreeing" and "not" lies.
+  v <- out$per_method_tau_correlation
+  expect_identical(names(v)[which.min(v)], "m5")
 })
 
 
@@ -102,10 +100,30 @@ test_that("cf_model_stability handles failed methods via OOF-matrix cleaning", {
   expect_equal(length(out$meta$methods_used), 3L)
 })
 
-test_that("cf_model_stability errors on non-cfomics_compare", {
+test_that("cf_model_stability refuses a comparison with one usable method", {
+  # Everything this function reports is an agreement between methods, so one
+  # surviving column leaves nothing to estimate: the correlation and Jaccard
+  # matrices would be 1 by definition and every agreement statistic NA.
+  cmp <- .make_mock_compare_stability(n = 50L, K = 4L)
+  for (m in c("m2", "m3", "m4")) cmp$metadata$oof_tau_matrix[, m] <- NA_real_
+  expect_error(suppressMessages(cf_model_stability(cmp)),
+               class = "cateomics_stability_single_method")
+  # Two usable columns is the smallest comparison it accepts.
+  cmp2 <- .make_mock_compare_stability(n = 50L, K = 4L)
+  for (m in c("m3", "m4")) cmp2$metadata$oof_tau_matrix[, m] <- NA_real_
+  out <- suppressMessages(cf_model_stability(cmp2))
+  expect_equal(length(out$meta$methods_used), 2L)
+  expect_true(all(is.finite(out$per_method_tau_correlation)))
+  # Kendall on a single column is where this used to fail: R's own
+  # symmetrisation sizes a matrix from the diagonal, and a self-correlation of
+  # 1 - 2.2e-16 collapses it to 0 x 0.
+  expect_true(all(is.finite(out$cor_matrices$kendall)))
+})
+
+test_that("cf_model_stability errors on non-cateomics_compare", {
   expect_error(
     cf_model_stability(list()),
-    class = "cfomics_invalid_compare_result"
+    class = "cateomics_invalid_compare_result"
   )
 })
 
@@ -127,7 +145,7 @@ test_that("cf_plot_stability renders the correlation heatmap for each cor_method
 test_that("cf_plot_stability errors on non-stability input", {
   expect_error(
     cf_plot_stability(list(), type = "cor"),
-    class = "cfomics_plot_stability_invalid_input"
+    class = "cateomics_invalid_input"
   )
 })
 
@@ -137,9 +155,29 @@ test_that("cf_plot_stability errors on non-stability input", {
 test_that("print and summary methods do not error", {
   cmp <- .make_mock_compare_stability(n = 40L, K = 3L)
   out <- suppressMessages(cf_model_stability(cmp))
-  expect_output(print(out), "<cfomics_model_stability>")
-  expect_output(print(out), "descriptive diagnostic")
+  expect_output(print(out), "<cateomics_model_stability>")
+  # The print reports what was measured; it carries no advice on how to use it.
+  expect_output(print(out), "primary_cor")
+  # What is reported is a correlation of the estimates, so that is what it is
+  # called.
+  expect_output(print(out), "tau correlation")
+  expect_false(any(grepl("agreement",
+                         capture.output(print(out)), fixed = TRUE)))
+  expect_false(any(grepl("outlier",
+                         capture.output(print(out)), fixed = TRUE)))
   s <- summary(out)
-  expect_s3_class(s, "summary.cfomics_model_stability")
+  expect_s3_class(s, "summary.cateomics_model_stability")
   expect_output(print(s), "cf_model_stability summary")
+})
+
+
+test_that("with two methods print gives the one number, and names it", {
+  mock <- .make_mock_compare_stability(n = 60L, K = 2L)
+  out <- suppressMessages(cf_model_stability(mock))
+  txt <- paste(capture.output(print(out)), collapse = "\n")
+  # One pair, so one number -- and on its own line it has to say which
+  # correlation it is.
+  expect_match(txt, "pairwise tau correlation (spearman):", fixed = TRUE)
+  expect_false(grepl("per-method mean tau correlation", txt, fixed = TRUE))
+  expect_false(grepl("pairwise range", txt, fixed = TRUE))
 })

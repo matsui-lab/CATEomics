@@ -10,19 +10,23 @@ cf_rule(
   threshold = 0,
   topk_frac = 0.2,
   grid = NULL,
-  direction = c("positive", "negative"),
   tree_depth = 2L,
   min_node_size = 1L,
   compute_policy_value = TRUE,
+  n_bootstrap = 200L,
+  random_state = 0L,
   ...
 )
 }
 \arguments{
 \item{model}{\code{cf_model} (CATE-capable).}
 
-\item{type}{\code{"threshold"} / \code{"topk"} / \code{"tree"}.}
+\item{type}{\code{"threshold"} (default) / \code{"topk"} / \code{"tree"}.}
 
-\item{threshold}{Numeric, threshold for \code{type = "threshold"}.}
+\item{threshold}{Numeric (default \code{0}), the effect above which
+\code{type = "threshold"} treats. When every estimated effect has the
+same sign the default treats everyone (or no one): the rule is then one
+of the fixed policies it is compared with, and \code{print()} says so.}
 
 \item{topk_frac}{Numeric in (0, 1], fraction to treat for
 \code{type = "topk"} (default 0.2).}
@@ -30,11 +34,8 @@ cf_rule(
 \item{grid}{Optional grid sweep for \code{type = "threshold"} / \code{"topk"}:
 \code{NULL} (default) fits a single rule; \code{TRUE} sweeps the default
 quantile (threshold) / equispaced (topk) grid; a numeric vector sweeps
-those values. A grid sweep returns a \code{cfomics_rule_grid} object
+those values. A grid sweep returns a \code{cateomics_rule_grid} object
 (used by \code{\link{cf_plot_policy_curve}}).}
-
-\item{direction}{\code{"positive"} (treat positive tau-hat) or
-\code{"negative"} (treat negative tau-hat). Default \code{"positive"}.}
 
 \item{tree_depth}{Integer, tree depth for \code{type = "tree"}
 (passed to \code{policytree::policy_tree(depth = ...)}, default 2L
@@ -43,33 +44,89 @@ those values. A grid sweep returns a \code{cfomics_rule_grid} object
 \item{min_node_size}{Integer, \code{policy_tree} \code{min.node.size}
 (default 1L = policy_tree default).}
 
-\item{compute_policy_value}{Logical, compute DR policy value.}
+\item{compute_policy_value}{Logical (default \code{TRUE}); compute the
+DR policy value and its baselines.}
 
-\item{...}{Ignored.}
+\item{n_bootstrap}{Integer, half-sample bootstrap replicates behind the
+policy-value standard errors (default 200).}
+
+\item{random_state}{Integer seed for that bootstrap (default \code{0}).}
+
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-Object of class \code{c("cfomics_rule", "list")}.
+Object of class \code{c("cateomics_rule", "list")} with
+  \code{type}, \code{threshold} (the cut-point given for
+  \code{type = "threshold"}, \code{NA} otherwise), \code{topk_frac},
+  \code{cutoff} (the effect at which \code{type = "topk"} ended up cutting
+  this sample, \code{NA} otherwise), \code{decisions} (0/1 per sample),
+  \code{tree} (the fitted \pkg{policytree} object for
+  \code{type = "tree"}; fitted on all rows and predicted on those same
+  rows, so its structure is in-sample), \code{treated_frac} and, unless
+  \code{compute_policy_value = FALSE}, \code{policy_value} with its
+  treat-all / treat-none / same-budget-random baselines. With
+  \code{grid}, an object of class \code{c("cateomics_rule_grid", "list")}
+  instead.
 }
 \description{
 Builds a binary policy \eqn{d(X) \in \{0, 1\}} from the OOF tau-hat
-of a CATE-capable \code{cf_model} using one of three rule types:
+of a CATE-capable \code{cf_model} using one of three rule types. Every
+type treats the units with the \emph{largest} \code{tau_hat}, on CATEomics'
+convention that a larger \code{Y} is the better outcome (see \code{Y} in
+\code{\link{cf_fit}}); for an outcome whose smaller values are better, fit
+the negated outcome.
 \itemize{
   \item \code{"threshold"}: \eqn{d(X) = 1\{\hat\tau(X) > threshold\}}.
   \item \code{"topk"}: \eqn{d(X) = 1\{rank(\hat\tau(X)) \in top\_K\}}.
   \item \code{"tree"}: \code{policytree::policy_tree} with reward
     \code{Gamma = [control = 0, treat = tau-hat]}, depth
     \code{tree_depth}. The tree maximises \eqn{\sum d(X)\,\hat\tau(X)}
-    welfare, reflecting the model's tau-hat directly (like threshold /
-    topk) rather than re-learning from DR scores.
+    welfare, so it is built from the model's tau-hat, as threshold and
+    topk are.
 }
-When \code{compute_policy_value = TRUE} (default) the honest DR policy value
-(independent shared nuisance) is computed and attached, together with
+When \code{compute_policy_value = TRUE} (default) the DR policy value is
+computed from the model's shared evaluation nuisance (out-of-fold when the
+fit used \code{partition = "oof"}) and attached, together with
 treat-all / treat-none / same-budget-random (PAPE) baselines.
 }
 \section{Policy tree engine}{
 
-The \code{type = "tree"} engine uses \code{policytree::policy_tree}
-(welfare-maximising), not a descriptive \code{rpart} surrogate.
+The \code{type = "tree"} engine is \code{policytree::policy_tree}. The tree
+is fitted once, on all rows, and the decisions come from predicting on
+those same rows, so the tree's structure is in-sample; the rewards it
+maximises are the out-of-fold \code{tau_hat} and the policy value is scored
+with the out-of-fold DR pseudo-outcome. The bootstrap behind the policy
+value does not refit it: it re-applies the same tree to each replicate.
+}
+
+\section{What \code{policy_value} reports}{
+
+  Four levels -- the rule's own value and the treat-all, treat-none and
+  same-budget-random baselines -- and the three differences of the rule from
+  those baselines. Each carries \code{estimate}, \code{se},
+  \code{ci_lower}, \code{ci_upper} and \code{ci_method}; the interval is
+  \eqn{\hat\theta \pm 1.96\,SE}.
+
+  \code{ci_method} names the standard error that component actually used.
+  Every component whose value depends on the rule, or on the budget the rule
+  spends, is resampled with the half-sample bootstrap: the replicates draw
+  rows and apply the rule as it is stated, which for \code{"topk"} means
+  reading its cut-point in the replicate and for \code{"threshold"} and
+  \code{"tree"} means applying the same fixed rule. Treat-all and
+  treat-none are plain means of fixed per-row values, so they keep the
+  influence-function standard error. A component with fewer than 20 usable
+  replicates keeps that closed form too, and \code{ci_method} says so.
+
+  The three differences also carry \code{p_value}, the two-sided
+  normal-approximation p-value against \eqn{H_0 = 0} on the reported
+  standard error: that the rule buys nothing over the baseline.
+  \code{improvement_over_random} and \code{improvement_over_none} add
+  \code{p_value_one_sided} against the alternative that the rule does
+  better. \code{improvement_over_all} has the two-sided p-value only,
+  because both of its directions are substantive. The four levels carry no
+  p-value: \eqn{H_0 = 0} would read "the mean outcome under this policy is
+  zero", which is a point on the outcome scale rather than a statement about
+  the rule.
 }
 
 \examples{
@@ -85,11 +142,13 @@ tree_rule <- cf_rule(fit, type = "tree")
 }
 \references{
 Zhou, Athey & Wager (2023) Offline Multi-Action Policy Learning:
-Generalization and Optimization, \emph{Operations Research} 71(1):148–183
+Generalization and Optimization, \emph{Operations Research} 71(1):148-183
 (policy-tree learning; \pkg{policytree}: Sverdrup, Kanodia, Zhou, Athey &
 Wager (2020) \emph{JOSS} 5(50):2232).
+
 Imai & Li (2023) Experimental Evaluation of Individualized Treatment Rules,
-\emph{JASA} 118(541):242–256 (PAPE baseline).
+\emph{JASA} 118(541):242-256 (PAPE baseline).
+
 Athey & Wager (2021) Policy Learning With Observational Data,
-\emph{Econometrica} 89(1):133–161 (DR policy value).
+\emph{Econometrica} 89(1):133-161 (DR policy value).
 }

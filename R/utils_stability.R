@@ -1,22 +1,21 @@
 # Shared helpers for stability diagnostics and ensemble.
 #
-# This file groups two helpers used by cf_select, cf_ensemble
-# (method = "cba"), and cf_model_stability:
+# This file groups two helpers:
 #
-# - .cfomics_clean_oof_tau_matrix: drop all-NA / zero-sd columns +
+# - .cateomics_clean_oof_tau_matrix: drop all-NA / zero-sd columns +
 #   complete.cases rows of the K-method OOF tau matrix returned by
 #   cf_compare(...)$metadata$oof_tau_matrix.
-# - .cfomics_tau_correlation_knee: pairwise correlation K x K + mean
-#   off-diagonal ordering + kneedle-style knee detection (CBA helper).
+# - .cateomics_tau_correlation_knee: pairwise correlation K x K + mean
+#   off-diagonal ordering + knee detection. Used by cf_ensemble(method = "cba").
 #
-# Both helpers operate purely on numeric matrices and have no upstream
-# dependencies (leaf helpers, no circular import risk).
+# The cleaner is called by cf_ensemble, cf_model_stability and
+# cf_benefit_groups; both helpers operate purely on numeric matrices.
 
 
 #' Clean the OOF tau matrix (drop failed methods + incomplete rows).
 #'
-#' Shared by `cf_select`, `cf_ensemble(method = "cba")`, and
-#' `cf_model_stability` so they use the same cleaning contract:
+#' Shared by `cf_ensemble`, `cf_model_stability` and `cf_benefit_groups` so
+#' they use the same cleaning contract:
 #'
 #' 1. Drop columns whose values are all NA or whose standard deviation is 0
 #'    (failed methods from cf_compare are stored as all-NA columns).
@@ -42,7 +41,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.cfomics_clean_oof_tau_matrix <- function(oof_tau_matrix) {
+.cateomics_clean_oof_tau_matrix <- function(oof_tau_matrix) {
   if (is.null(oof_tau_matrix) || !is.matrix(oof_tau_matrix) ||
       !is.numeric(oof_tau_matrix)) {
     return(list(
@@ -115,24 +114,20 @@
 #' Pairwise correlation matrix + kneedle ordering for tau hat columns.
 #'
 #' Used by `cf_ensemble(method = "cba")` (Consensus-Based Averaging, Machluf
-#' et al. 2026) and `cf_model_stability` to rank methods by their
-#' mean agreement with the others and locate a knee in the sorted mean
-#' correlation curve.
+#' et al. 2024) to rank methods by their mean agreement with the others and
+#' locate a knee in the sorted mean correlation curve. `cf_model_stability`
+#' computes its own correlations and does not call this.
 #'
 #' Implementation notes:
 #'
-#' * Kendall is the default per ensemble spec, but Spearman is offered as a
-#'   fallback because Kendall's pairwise complexity is O(n^2 K^2) and can be
-#'   prohibitive on omics-scale n. Spearman is rank-based, scale-invariant,
-#'   and O(n log n K^2).
-#' * Pearson is exposed for callers that already know their inputs are
-#'   linear (e.g. quick stability previews on small K).
-#' * Knee detection uses the largest second-order drop of the sorted mean
-#'   off-diagonal correlation curve, which mirrors the
-#'   "kneedle" heuristic without requiring an external dependency.
+#' * Kendall is the default; Spearman and Pearson can be chosen instead.
+#'   Kendall's pairwise complexity is O(n^2 K^2) against Spearman's
+#'   O(n log n K^2).
+#' * Knee detection uses the largest first difference of the sorted mean
+#'   off-diagonal correlation curve.
 #'
 #' @param mat Cleaned numeric `n x K` matrix (output of
-#'   `.cfomics_clean_oof_tau_matrix(...)$mat`).
+#'   `.cateomics_clean_oof_tau_matrix(...)$mat`).
 #' @param cor_method Character; one of `"kendall"` (default), `"spearman"`,
 #'   or `"pearson"`.
 #' @param min_knee Integer; minimum number of methods to keep when a knee is
@@ -156,7 +151,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.cfomics_tau_correlation_knee <- function(mat,
+.cateomics_tau_correlation_knee <- function(mat,
                                           cor_method = c("kendall",
                                                          "spearman",
                                                          "pearson"),
@@ -185,7 +180,7 @@
   ordering        <- order(mean_cor, decreasing = TRUE)
   sorted_mean_cor <- mean_cor[ordering]
 
-  knee_k <- .cfomics_locate_knee(sorted_mean_cor, min_knee = min_knee)
+  knee_k <- .cateomics_locate_knee(sorted_mean_cor, min_knee = min_knee)
 
   list(
     cor_matrix      = cor_matrix,
@@ -199,22 +194,22 @@
 
 #' Locate the knee of a monotonically decreasing curve.
 #'
-#' Internal helper for `.cfomics_tau_correlation_knee`. Implements a simple
+#' Internal helper for `.cateomics_tau_correlation_knee`. Implements a simple
 #' kneedle-style heuristic without external dependencies:
 #'
 #' 1. Compute first differences of the sorted (descending) curve.
-#' 2. The knee index is one past the largest drop (most negative diff).
+#' 2. The knee index is the position of the largest drop, i.e. the number of
+#'    methods before it.
 #' 3. Clamp the index to `[min_knee, length(x)]`.
 #'
-#' This is faster and lighter than `kneedle` / `inflection`, and stable for
-#' small K typical in cf_compare (K = 5..15).
+#' Computed here rather than through an external knee-detection package.
 #'
 #' @param x Numeric vector of sorted mean correlations (descending).
 #' @param min_knee Integer; minimum number of methods to keep.
 #' @return Integer in `[min_knee, length(x)]`.
 #' @keywords internal
 #' @noRd
-.cfomics_locate_knee <- function(x, min_knee = 2L) {
+.cateomics_locate_knee <- function(x, min_knee = 2L) {
   n <- length(x)
   if (n <= min_knee) return(n)
   diffs <- diff(x)

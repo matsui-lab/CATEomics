@@ -17,20 +17,20 @@ test_that("cf_fit validates `propensity_score` range and length", {
   )
   # Out of range.
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf",
             propensity_score = 1.5, partition = "none"),
-    class = "cfomics_invalid_propensity_score"
+    class = "cateomics_invalid_propensity_score"
   )
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf",
             propensity_score = 0, partition = "none"),
-    class = "cfomics_invalid_propensity_score"
+    class = "cateomics_invalid_propensity_score"
   )
   # Length mismatch.
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf",
             propensity_score = rep(0.5, 5), partition = "none"),
-    class = "cfomics_invalid_propensity_score"
+    class = "cateomics_invalid_propensity_score"
   )
 })
 
@@ -43,10 +43,10 @@ test_that("cf_fit raises conflict when both propensity_score and model_propensit
     X1 = rnorm(40), X2 = rnorm(40)
   )
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf",
             propensity_score = 0.5, model_propensity = "rf",
             partition = "none"),
-    class = "cfomics_propensity_args_conflict"
+    class = "cateomics_propensity_args_conflict"
   )
 })
 
@@ -60,9 +60,9 @@ test_that("bcf with vector known PS (stratified RCT)", {
   Y  <- 0.4 * Tr + 0.2 * strata + rnorm(n)
   df <- data.frame(Y = Y, T = Tr, X1 = rnorm(n), X2 = rnorm(n))
   fit <- suppressMessages(suppressWarnings(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
-            propensity_score = ps_strata, partition = "none",
-            n_burn = 50L, n_iter = 100L, random_state = 42L)
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf", propensity_score = ps_strata,
+            partition = "none", random_state = 42L, params = list(nburn = 50L,
+                nsim = 100L))
   ))
   expect_s3_class(fit, "cf_model")
 })
@@ -75,9 +75,9 @@ test_that("bcf accepts known PS via dispatch (pihat forward)", {
   Y  <- 0.3 * Tr + rnorm(n)
   df <- data.frame(Y = Y, T = Tr, X1 = rnorm(n), X2 = rnorm(n))
   fit <- suppressMessages(suppressWarnings(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "bcf",
-            propensity_score = 0.5, partition = "none",
-            n_burn = 50L, n_iter = 100L, random_state = 1L)
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "bcf", propensity_score = 0.5,
+            partition = "none", random_state = 1L, params = list(nburn = 50L,
+                nsim = 100L))
   ))
   expect_s3_class(fit, "cf_model")
 })
@@ -91,16 +91,16 @@ test_that("drlearner with known PS (smoke) — scalar only via cross-fit constra
   df <- data.frame(Y = Y, T = Tr, X1 = rnorm(n), X2 = rnorm(n))
   # scalar OK
   fit <- suppressMessages(suppressWarnings(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "drlearner",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "drlearner",
             propensity_score = 0.5, partition = "none",
             random_state = 42L)
   ))
   expect_s3_class(fit, "cf_model")
   # vector unsupported for cross-fit methods
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "drlearner",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "drlearner",
             propensity_score = rep(0.5, n), partition = "none"),
-    class = "cfomics_propensity_vector_unsupported"
+    class = "cateomics_propensity_vector_unsupported"
   )
 })
 
@@ -111,9 +111,9 @@ test_that("xlearner rejects vector PS (cross-fit constraint)", {
   Y  <- 0.4 * Tr + rnorm(n)
   df <- data.frame(Y = Y, T = Tr, X1 = rnorm(n), X2 = rnorm(n))
   expect_error(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "xlearner",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "xlearner",
             propensity_score = rep(0.5, n), partition = "none"),
-    class = "cfomics_propensity_vector_unsupported"
+    class = "cateomics_propensity_vector_unsupported"
   )
 })
 
@@ -125,7 +125,7 @@ test_that("xlearner with scalar known PS via FixedPropensityModel (smoke)", {
   Y  <- 0.5 * Tr + rnorm(n)
   df <- data.frame(Y = Y, T = Tr, X1 = rnorm(n), X2 = rnorm(n))
   fit <- suppressMessages(suppressWarnings(
-    cf_fit(Y ~ T | X1 + X2, data = df, method = "xlearner",
+    cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = df, method = "xlearner",
             propensity_score = 0.5, partition = "none",
             random_state = 42L)
   ))

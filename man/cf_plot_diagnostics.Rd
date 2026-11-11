@@ -4,20 +4,28 @@
 \alias{cf_plot_diagnostics}
 \title{Plot one view of a cf_diagnostics object.}
 \usage{
-cf_plot_diagnostics(x, type = c("overlap", "smd", "variable", "evalue"), ...)
+cf_plot_diagnostics(x, type = c("overlap", "smd", "variable"), ...)
 }
 \arguments{
-\item{x}{A \code{cfomics_diagnostics} object (from \code{\link{cf_diagnostics}}).}
+\item{x}{A \code{cateomics_diagnostics} object (from \code{\link{cf_diagnostics}}).}
 
 \item{type}{One of \code{"overlap"} (PS density, default),
-\code{"smd"} (Love dot plot), \code{"variable"} (requested-variable
-distributions), \code{"evalue"} (E-value bias contour).}
+\code{"smd"} (Love dot plot) or \code{"variable"} (requested-variable
+distributions). The E-value is reported as a number by \code{print()}
+and in \code{$evalue}; it has no view of its own.}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-A \code{ggplot} object (invisibly), or \code{NULL} if ggplot2 is
-  unavailable / the requested view has no data.
+A \code{ggplot} object, or \code{NULL} (invisibly) when the
+  requested view is not in the object. A view whose panel would be empty is
+  refused rather than drawn: \code{"overlap"} on a known propensity, which
+  takes one value for everyone, aborts with \code{cateomics_plot_no_data}
+  and points at \code{print()} for the support summary.
+
+  The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+  themes or scales to it restyles the panel, and because the arm is mapped
+  to the fill, a fill scale added afterwards replaces the one here.
 }
 \description{
 Plot one view of a cf_diagnostics object.

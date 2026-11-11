@@ -4,17 +4,19 @@
 \alias{cf_plot_rule}
 \title{Plot the policy tree from cf_rule(type = "tree").}
 \usage{
-cf_plot_rule(rule, backend = c("auto", "rpart.plot", "base"), ...)
+cf_plot_rule(rule, ...)
 }
 \arguments{
-\item{rule}{A \code{cfomics_rule} produced by \code{cf_rule(type = "tree")}.}
+\item{rule}{A \code{cateomics_rule} produced by \code{cf_rule(type = "tree")}.}
 
-\item{backend}{One of \code{"auto"}, \code{"rpart.plot"}, \code{"base"}.}
-
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-Rendered to the active device (invisible \code{NULL}).
+The \code{DiagrammeR} htmlwidget for the tree, with the leaves
+  labelled by what they do and a caption naming the scale the splits are
+  on (the preprocessed covariates). When \code{DiagrammeR} is not
+  installed, the text summary is printed and \code{NULL} is returned
+  invisibly.
 }
 \description{
 Plot the policy tree from cf_rule(type = "tree").

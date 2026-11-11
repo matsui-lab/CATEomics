@@ -14,3 +14,9 @@
 ^Meta$
 __pycache__
 \.pyc$
+# bcf writes its MCMC tree dumps to the working directory, so a test run
+# leaves them in tests/testthat. They are gitignored, so a tarball built
+# from a clean checkout never had them, but a local build picked up 28 MB.
+^tests/testthat/(con|mod)_trees\.[0-9]+\.txt$
+# A tarball left in the package root would be copied into the next one.
+^.*\.tar\.gz$

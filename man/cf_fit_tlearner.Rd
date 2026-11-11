@@ -2,7 +2,7 @@
 % Please edit documentation in R/methods_metalearners.R
 \name{cf_fit_tlearner}
 \alias{cf_fit_tlearner}
-\title{Fit a T-learner via econml}
+\title{Fit a T-learner via econml.metalearners}
 \usage{
 cf_fit_tlearner(
   X,
@@ -14,21 +14,29 @@ cf_fit_tlearner(
   n_bootstrap = 100L,
   random_state = NULL,
   binary_outcome = FALSE,
-  ...
+  params = list()
 )
 }
 \arguments{
-\item{X, T, Y, covariate_names, bootstrap_ci, n_bootstrap, random_state, binary_outcome, ...}{See \code{\link{cf_fit_slearner}}.}
+\item{X, T, Y, covariate_names, bootstrap_ci, n_bootstrap, random_state, binary_outcome, params}{See \code{\link{cf_fit_slearner}}.}
 
 \item{model_outcome}{Base-learner name for both arms. Default \code{"ridge"}.}
 }
 \value{
 A list with \code{model} (\code{list(model_path, backend)}) and
-  \code{res} conforming to the \code{cfomics_result} contract.
+  \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Fits two separate outcome regressions and reports
 \eqn{\hat\mu_1(X) - \hat\mu_0(X)} as the CATE.
+}
+\references{
+Künzel, Sekhon, Bickel & Yu (2019) Metalearners for estimating heterogeneous
+treatment effects using machine learning, \emph{PNAS} 116(10):4156-4165.
+
+Battocchi, Dillon, Hei, Lewis, Oka, Oprescu & Syrgkanis (2019) EconML: A
+Python Package for ML-Based Heterogeneous Treatment Effects Estimation,
+\url{https://github.com/py-why/EconML} (implementation).
 }
 \seealso{
 \code{\link{metalearners}}.

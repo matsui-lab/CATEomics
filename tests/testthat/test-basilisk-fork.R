@@ -26,7 +26,7 @@ test_that(".cf_py_run survives concurrent forks in socket mode", {
   n <- if (nzchar(Sys.getenv("_R_CHECK_LIMIT_CORES_"))) 2L else 6L
   res <- parallel::mclapply(seq_len(n), function(i) {
     tryCatch(
-      cfomics:::.cf_py_run(function() 2L + 2L),
+      CATEomics:::.cf_py_run(function() 2L + 2L),
       error = function(e) conditionMessage(e)
     )
   }, mc.cores = n)

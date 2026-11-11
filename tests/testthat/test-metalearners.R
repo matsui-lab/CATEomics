@@ -3,11 +3,10 @@ test_that("S/T/X-learner smoke: fit, predict, contract compliance", {
 
   df <- sim_simple_linear(n = 200L, p = 5L, seed = 123L, tau = 1.5)
   cov_names <- paste0("X", 1:5)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
   for (meth in c("slearner", "tlearner", "xlearner")) {
     fit <- suppressMessages(
-      cf_fit(fml, data = df, method = meth, random_state = 42L)
+      cf_fit(data = df, Y = "Y", T = "T", X_baseline = cov_names, method = meth, random_state = 42L)
     )
 
     expect_s3_class(fit, "cf_model")
@@ -51,10 +50,9 @@ test_that("S/T/X-learner accept newdata in predict", {
 
   df <- sim_simple_linear(n = 150L, p = 4L, seed = 7L, tau = 1.0)
   cov_names <- paste0("X", 1:4)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
   fit <- suppressMessages(
-    cf_fit(fml, data = df, method = "tlearner", random_state = 1L)
+    cf_fit(data = df, Y = "Y", T = "T", X_baseline = cov_names, method = "tlearner", random_state = 1L)
   )
 
   newX <- df[1:10, cov_names, drop = FALSE]
@@ -69,10 +67,9 @@ test_that("X-learner accepts model_propensity argument", {
 
   df <- sim_simple_linear(n = 150L, p = 4L, seed = 11L)
   cov_names <- paste0("X", 1:4)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
   fit <- suppressMessages(
-    cf_fit(fml, data = df, method = "xlearner",
+    cf_fit(data = df, Y = "Y", T = "T", X_baseline = cov_names, method = "xlearner",
            model_outcome = "linear", model_propensity = "logistic",
            random_state = 3L)
   )

@@ -122,8 +122,8 @@ test_that("Python methods honour the four-pillar contract (basilisk)", {
   for (m in c("slearner", "tlearner", "xlearner", "drlearner",
               "cevae", "tarnet", "dragonnet")) {
     nn <- m %in% c("cevae", "tarnet", "dragonnet")
-    extra <- if (m == "cevae") list(num_epochs = 10L) else
-             if (nn) list(n_iter = 50L) else list()
+    extra <- if (m == "cevae") list(params = list(num_epochs = 10L)) else
+             if (nn) list(params = list(n_iter = 50L)) else list()
     fit <- suppressWarnings(suppressMessages(do.call(cf_fit, c(
       list(data = df, Y = "Y", T = "T", X_baseline = Xb,
            method = m, partition = "none", random_state = 1L), extra))))
@@ -146,39 +146,55 @@ test_that("Python methods honour the four-pillar contract (basilisk)", {
     cf_compare(data = data, Y = Y, T = T, X_baseline = X_baseline,
                methods = c("grf", "bcf"), n_folds = 3L,
                verbose = FALSE, random_state = 1L)))
-  expect_s3_class(cmp, "cfomics_compare")
+  expect_s3_class(cmp, "cateomics_compare")
 
   sel <- cf_select(cmp, metric = "r_loss")
-  expect_s3_class(sel, "cfomics_select")
+  expect_s3_class(sel, "cateomics_select")
   model <- sel$model
 
   expect_s3_class(suppressWarnings(cf_ensemble(cmp, method = "mean")),
-                  "cfomics_ensemble")
+                  "cateomics_ensemble")
 
   ev <- suppressWarnings(suppressMessages(cf_evaluate(model)))
-  expect_s3_class(ev, "cfomics_evaluate")
+  expect_s3_class(ev, "cateomics_evaluate")
 
   rule <- suppressWarnings(cf_rule(model, type = "topk", topk_frac = 0.3))
-  expect_s3_class(rule, "cfomics_rule")
+  expect_s3_class(rule, "cateomics_rule")
 
   rg <- suppressWarnings(cf_rule(model, type = "topk", grid = TRUE))
-  expect_s3_class(rg, "cfomics_rule_grid")
+  expect_s3_class(rg, "cateomics_rule_grid")
 
   itp <- suppressWarnings(suppressMessages(cf_interpret(model)))
-  expect_s3_class(itp, "cfomics_interpret")
+  expect_s3_class(itp, "cateomics_interpret")
 
-  stab <- suppressWarnings(cf_model_stability(cmp))
-  expect_s3_class(stab, "cfomics_model_stability")
+  # Agreement between methods needs two of them. bcf's BART degenerates on the
+  # multi-omics container and cf_compare records that and continues, so this
+  # helper is reached with one surviving method on some containers and two on
+  # others. Both outcomes are asserted rather than assuming either. The cause
+  # is the row count the forest actually sees: the comparison fits each fold on
+  # n - ceiling(n / n_folds) rows, which here is 40 against 48 covariates,
+  # while the single-assay container's 33 covariates fit in the same 40 rows.
+  surviving <- sum(vapply(seq_len(ncol(cmp$metadata$oof_tau_matrix)),
+                          function(j) !all(is.na(cmp$metadata$oof_tau_matrix[, j])),
+                          logical(1)))
+  stab <- NULL
+  if (surviving >= 2L) {
+    stab <- suppressWarnings(cf_model_stability(cmp))
+    expect_s3_class(stab, "cateomics_model_stability")
+  } else {
+    expect_error(suppressWarnings(cf_model_stability(cmp)),
+                 class = "cateomics_stability_single_method")
+  }
 
   grp <- suppressWarnings(cf_benefit_groups(model, method = "median"))
-  expect_s3_class(grp, "cfomics_groups")
+  expect_s3_class(grp, "cateomics_groups")
 
   diag <- suppressWarnings(suppressMessages(cf_diagnostics(model)))
-  expect_s3_class(diag, "cfomics_diagnostics")
+  expect_s3_class(diag, "cateomics_diagnostics")
 
   if (requireNamespace("RobustRankAggreg", quietly = TRUE)) {
     expect_s3_class(suppressWarnings(cf_aggregate_vi(cmp)),
-                    "cfomics_aggregate_vi")
+                    "cateomics_aggregate_vi")
   }
   if (requireNamespace("shapviz", quietly = TRUE)) {
     expect_s3_class(suppressWarnings(as_shapviz(itp)), "shapviz")
@@ -194,7 +210,9 @@ test_that("major functions run on a data.frame (named-args)", {
   wf <- .cov_run_workflow(df, "Y", "T", .cov_covnames())
 
   df2 <- cf_attach_results(df, wf$model, what = "all", groups = wf$grp)
-  expect_true(all(c("cf_tau", "cf_ate") %in% colnames(df2)))
+  expect_true("cf_tau" %in% colnames(df2))
+  # The average effect is one number for the fit, not a column of n copies.
+  expect_false("cf_ate" %in% colnames(df2))
 })
 
 test_that("major functions run on a SummarizedExperiment (clinical + omics)", {
@@ -214,7 +232,7 @@ test_that("major functions run on a multi-omics MultiAssayExperiment", {
   skip_if_not_installed("MultiAssayExperiment")
   mae <- .cov_make_mae()   # rnaseq + methyl + protein
   wf <- .cov_run_workflow(mae, "outcome", "treatment", c("age", "sex", "bmi"))
-  expect_s3_class(wf$cmp, "cfomics_compare")
+  expect_s3_class(wf$cmp, "cateomics_compare")
 })
 
 # --------------------------------------------------------------------------
@@ -245,7 +263,7 @@ test_that("predict on newdata reloads the serialised Python model (basilisk)", {
   # one econml (joblib) and one catenets (torch.save) backend cover both
   # serialisation paths through the newdata reload.
   for (m in c("xlearner", "tarnet")) {
-    extra <- if (m == "tarnet") list(n_iter = 50L) else list()
+    extra <- if (m == "tarnet") list(params = list(n_iter = 50L)) else list()
     fit <- suppressWarnings(suppressMessages(do.call(cf_fit, c(
       list(data = df, Y = "Y", T = "T", X_baseline = .cov_covnames(),
            method = m, partition = "none", random_state = 1L), extra))))
@@ -281,7 +299,8 @@ test_that("plot family and print/summary run without error", {
     feat <- colnames(as_shapviz(wf$itp)$S)[1]
     ggsave1(cf_plot_interpret(wf$itp, type = "dependence", feature = feat))
   }
-  if (requireNamespace("rpart.plot", quietly = TRUE)) {
+  # `cf_plot_rule()` renders through DiagrammeR, so that is what gates it.
+  if (requireNamespace("DiagrammeR", quietly = TRUE)) {
     rtree <- suppressWarnings(cf_rule(wf$model, type = "tree", tree_depth = 2L))
     expect_no_error(suppressMessages(cf_plot_rule(rtree)))
   }
@@ -298,10 +317,10 @@ test_that("plot family and print/summary run without error", {
 })
 
 # --------------------------------------------------------------------------
-# Block 4: propensity-score regimes (observational / known RCT / trim)
+# Block 4: propensity-score regimes (observational / known RCT / clip)
 # --------------------------------------------------------------------------
 
-test_that("propensity-score regimes: observational, fixed scalar/vector, trim", {
+test_that("propensity-score regimes: observational, fixed scalar/vector, clip", {
   skip_if_not_installed("grf")
   df <- .cov_make_df(); Xb <- .cov_covnames()
 
@@ -314,23 +333,23 @@ test_that("propensity-score regimes: observational, fixed scalar/vector, trim", 
   if (requireNamespace("bcf", quietly = TRUE)) {
     f_rct <- suppressWarnings(suppressMessages(
       cf_fit(data = df, Y = "Y", T = "T", X_baseline = Xb,
-             method = "bcf", partition = "none", propensity_score = 0.5,
-             n_burn = 50L, n_iter = 100L, random_state = 1L)))
+              method = "bcf", partition = "none", propensity_score = 0.5,
+              random_state = 1L, params = list(nburn = 50L, nsim = 100L))))
     expect_true(is.finite(f_rct$res$ate))
 
     # (c) known PS supplied as a length-n vector.
     f_vec <- suppressWarnings(suppressMessages(
       cf_fit(data = df, Y = "Y", T = "T", X_baseline = Xb,
-             method = "bcf", partition = "none",
-             propensity_score = plogis(0.4 * df$X1),
-             n_burn = 50L, n_iter = 100L, random_state = 1L)))
+              method = "bcf", partition = "none", propensity_score = plogis(0.4 *
+                  df$X1), random_state = 1L, params = list(nburn = 50L,
+                  nsim = 100L))))
     expect_true(is.finite(f_vec$res$ate))
   }
 
   # (d) PS trimming (clip extreme weights).
   expect_s3_class(suppressWarnings(suppressMessages(
     cf_fit(data = df, Y = "Y", T = "T", X_baseline = Xb, method = "grf",
-           partition = "none", trim = c(0.05, 0.95), random_state = 1L))),
+           partition = "none", clip = c(0.05, 0.95), random_state = 1L))),
     "cf_model")
 
   # (e) known PS threads through a PS-using Python method (basilisk).
@@ -397,14 +416,3 @@ test_that("partition oof vs none populate the OOF fields as specified", {
   expect_null(f_none$res$tau_hat_oof)
 })
 
-test_that("as_cf_data is a pure converter (all assay features, no selection)", {
-  skip_if_not_installed("SummarizedExperiment")
-  se <- .cov_make_se()   # 30 genes
-  cd <- suppressWarnings(suppressMessages(
-    as_cf_data(se, formula = outcome ~ treatment | age + sex + bmi)))
-  expect_true(is.list(cd))
-  expect_true(!is.null(cd$X))
-  # Clinical (age/sex/bmi) + every assay gene, no selection / lognorm.
-  expect_true(all(paste0("gene", seq_len(30)) %in% cd$covariate_names))
-  expect_equal(ncol(cd$X), 3L + 30L)
-})

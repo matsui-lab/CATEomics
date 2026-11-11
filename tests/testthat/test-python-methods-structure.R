@@ -19,7 +19,7 @@ test_that("cf_fit with drlearner returns a cf_model when Python is available", {
     X2 = rnorm(n)
   )
 
-  result <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner")
+  result <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner")
   expect_s3_class(result, "cf_model")
   expect_equal(result$method, "drlearner")
 })
@@ -36,7 +36,7 @@ test_that("predict_cf_drlearner validates type argument", {
     X2 = rnorm(n)
   )
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner")
 
   # Test all valid types
   expect_type(predict(fit, type = "ate"), "double")
@@ -68,8 +68,8 @@ test_that("cf_fit with ganite returns a cf_model when Python is available", {
     X2 = rnorm(n)
   )
 
-  result <- cf_fit(Y ~ T | X1 + X2, data = data, method = "ganite",
-                   iterations = 10L, verbose = FALSE)
+  result <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "ganite",
+          params = list(iterations = 10L))
   expect_s3_class(result, "cf_model")
   expect_equal(result$method, "ganite")
 })
@@ -90,8 +90,8 @@ test_that("cf_fit with cevae returns a cf_model when Python is available", {
     X2 = rnorm(n)
   )
 
-  result <- cf_fit(Y ~ T | X1 + X2, data = data, method = "cevae",
-                   num_epochs = 10L, verbose = FALSE)
+  result <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "cevae",
+          params = list(num_epochs = 10L))
   expect_s3_class(result, "cf_model")
   expect_equal(result$method, "cevae")
 })
@@ -111,13 +111,15 @@ test_that("cf_fit method auto-selection prefers R methods when Python unavailabl
     X2 = rnorm(n)
   )
 
-  # Auto method should work regardless of Python availability
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "auto")
+  # `method` has no "auto": which estimator runs is the caller's choice, and
+  # resolving it from what happens to be installed made the same script pick
+  # a different method on a different machine.
+  expect_error(cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "auto"))
+  expect_false("auto" %in% eval(formals(cf_fit)$method))
 
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf")
   expect_s3_class(fit, "cf_model")
-
-  # "prefer R" contract: auto selects an R-native method (grf/bcf) here.
-  expect_true(fit$method %in% c("grf", "bcf"))
+  expect_identical(fit$method, "grf")
 })
 
 test_that("all methods return consistent result structure", {
@@ -133,7 +135,7 @@ test_that("all methods return consistent result structure", {
   )
 
   # Test with grf (always available when installed)
-  fit_grf <- cf_fit(Y ~ T | X1 + X2, data = data, method = "grf")
+  fit_grf <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf")
 
   # Check structure (four-pillar)
   expect_true("method" %in% names(fit_grf))
@@ -167,8 +169,8 @@ test_that("Python method result structure matches R method structure", {
     X2 = rnorm(n)
   )
 
-  fit_r <- cf_fit(Y ~ T | X1 + X2, data = data, method = "grf", partition = "none")
-  fit_py <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner")
+  fit_r <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf", partition = "none")
+  fit_py <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner")
 
   # R-native partition = "none" fits do not populate `oof_ite` (no K-fold
   # cross-fitting), whereas the Python oof path does. Compare the core contract
@@ -202,7 +204,7 @@ test_that("predict types work for grf method", {
     X2 = rnorm(n)
   )
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "grf", partition = "none")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf", partition = "none")
 
   # Test all prediction types
   ate <- predict(fit, type = "ate")
@@ -234,7 +236,7 @@ test_that("predict validates type argument", {
     X1 = rnorm(n)
   )
 
-  fit <- cf_fit(Y ~ T | X1, data = data, method = "grf", partition = "none")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = "X1", data = data, method = "grf", partition = "none")
 
   expect_error(
     predict(fit, type = "invalid_type"),

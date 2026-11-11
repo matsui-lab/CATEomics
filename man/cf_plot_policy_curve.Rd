@@ -8,13 +8,16 @@ baseline (PAPE).}
 cf_plot_policy_curve(rule_grid, ...)
 }
 \arguments{
-\item{rule_grid}{A \code{cfomics_rule_grid} object.}
+\item{rule_grid}{A \code{cateomics_rule_grid} object.}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
 A ggplot object. The x-axis is the treated fraction; a dashed line
   marks the same-budget random-assignment policy value (the PAPE baseline).
+  Adding layers, themes or scales to it restyles the panel. The two lines
+  and the band are coloured by constants rather than by a mapping, so a
+  colour scale added afterwards does not reach them.
 }
 \description{
 Plot the policy-value curve from cf_rule(grid=) with a same-budget random

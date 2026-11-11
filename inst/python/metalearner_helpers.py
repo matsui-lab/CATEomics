@@ -107,3 +107,57 @@ def drlearner_potential_outcomes(est, X) -> Tuple[np.ndarray, np.ndarray]:
     y0 = np.mean(np.vstack(preds_0), axis=0)
     y1 = np.mean(np.vstack(preds_1), axis=0)
     return y0, y1
+
+
+def _propensity_predict(model, X: np.ndarray) -> np.ndarray:
+    """Return P(T=1|X) from a fitted binary propensity classifier.
+
+    econml reads the treated column as ``predict_proba(X)[:, 1:]``; look the
+    class up by label so a reordered ``classes_`` cannot silently flip the
+    score.
+    """
+    proba = np.asarray(model.predict_proba(X))
+    classes = getattr(model, "classes_", None)
+    if classes is not None and 1 in list(classes):
+        j = list(classes).index(1)
+    else:
+        j = proba.shape[1] - 1
+    return proba[:, j].ravel()
+
+
+def xlearner_propensity(est, X) -> np.ndarray:
+    """Return P(T=1|X) from a fitted XLearner.
+
+    ``est.propensity_models`` holds one model per non-control treatment; with a
+    binary treatment that is a single model fit on the whole sample, and it is
+    the same object ``const_marginal_effect`` weights the two imputed-effect
+    surfaces with.
+    """
+    X = _as_2d(X)
+    models = getattr(est, "propensity_models", None)
+    if not models:
+        return None
+    return _propensity_predict(models[0], X)
+
+
+def drlearner_propensity(est, X) -> np.ndarray:
+    """Return P(T=1|X) from a fitted DRLearner, averaged over the fold models.
+
+    ``models_propensity`` is nested ``[mc_iters][cv_folds]``. econml does not
+    persist which rows each fold held out (``fitted_inds`` is local to
+    ``_crossfit``), so a training row cannot be matched to the one model that
+    did not see it; the average over folds is what can be reconstructed. On
+    rows the estimator never saw, every fold model is out-of-sample and the
+    average is an ordinary ensemble prediction.
+    """
+    X = _as_2d(X)
+    mp = getattr(est, "models_propensity", None)
+    if not mp:
+        return None
+    preds = []
+    for mc_models in mp:
+        for fold_model in mc_models:
+            preds.append(_propensity_predict(fold_model, X))
+    if not preds:
+        return None
+    return np.mean(np.vstack(preds), axis=0)

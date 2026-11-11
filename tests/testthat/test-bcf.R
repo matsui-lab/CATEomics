@@ -14,12 +14,10 @@ test_that("cf_fit_bcf basic execution", {
   data <- data.frame(Y = Y, T = T, X)
 
   cov_names <- paste0("X", 1:p)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
-  tree_dir <- tempfile("cfomics_bcf_test_")
-  fit <- cf_fit(fml, data = data, method = "bcf",
-                n_burn = 100, n_iter = 200, n_chains = 1L,
-                save_tree_directory = tree_dir)
+  tree_dir <- tempfile("cateomics_bcf_test_")
+  fit <- cf_fit(data = data, Y = "Y", T = "T", X_baseline = cov_names, method = "bcf", params = list(nburn = 100,
+          nsim = 200, n_chains = 1L, save_tree_directory = tree_dir))
 
   expect_s3_class(fit, "cf_model")
   expect_s3_class(fit, "cf_model")
@@ -54,11 +52,9 @@ test_that("cf_fit_bcf provides credible intervals", {
   data <- data.frame(Y = Y, T = T, X)
 
   cov_names <- paste0("X", 1:p)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
-  fit <- cf_fit(fml, data = data, method = "bcf",
-                n_burn = 50, n_iter = 100, n_chains = 1L,
-                save_tree_directory = tempfile("cfomics_bcf_test_"))
+  fit <- cf_fit(data = data, Y = "Y", T = "T", X_baseline = cov_names, method = "bcf", params = list(nburn = 50,
+          nsim = 100, n_chains = 1L, save_tree_directory = tempfile("cateomics_bcf_test_")))
 
   summary_stats <- predict(fit, type = "summary")
   expect_true("ate_ci_lower" %in% names(summary_stats))
@@ -82,12 +78,10 @@ test_that("cf_fit_bcf supports newdata prediction via save_tree_directory", {
   data <- data.frame(Y = Y, T = T, X)
 
   cov_names <- paste0("X", 1:p)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
-  tree_dir <- tempfile("cfomics_bcf_newdata_")
-  fit <- cf_fit(fml, data = data, method = "bcf",
-                n_burn = 50, n_iter = 100, n_chains = 1L,
-                save_tree_directory = tree_dir)
+  tree_dir <- tempfile("cateomics_bcf_newdata_")
+  fit <- cf_fit(data = data, Y = "Y", T = "T", X_baseline = cov_names, method = "bcf", params = list(nburn = 50,
+          nsim = 100, n_chains = 1L, save_tree_directory = tree_dir))
 
   n_new <- 15
   X_new <- matrix(rnorm(n_new * p), n_new, p)
@@ -128,11 +122,9 @@ test_that("cf_fit_bcf newdata auto-computes pihat_new", {
   data <- data.frame(Y = Y, T = T, X)
 
   cov_names <- paste0("X", 1:p)
-  fml <- as.formula(paste("Y ~ T |", paste(cov_names, collapse = " + ")))
 
-  fit <- cf_fit(fml, data = data, method = "bcf",
-                n_burn = 40, n_iter = 80, n_chains = 1L,
-                save_tree_directory = tempfile("cfomics_bcf_err_"))
+  fit <- cf_fit(data = data, Y = "Y", T = "T", X_baseline = cov_names, method = "bcf", params = list(nburn = 40,
+          nsim = 80, n_chains = 1L, save_tree_directory = tempfile("cateomics_bcf_err_")))
 
   # BCF newdata predict auto-computes pihat_new from the persisted PS model.
   expect_true(!is.null(fit$model$ps_model))
@@ -141,7 +133,10 @@ test_that("cf_fit_bcf newdata auto-computes pihat_new", {
   colnames(X_new) <- cov_names
 
   out <- predict_cf_bcf(fit, newdata = X_new, pihat_new = NULL, type = "all")
-  expect_named(out, c("ate", "ate_ci", "tau_hat", "tau_ci", "mu0_hat", "mu1_hat"))
+  expect_named(out, c("ate", "ate_ci", "tau_hat", "tau_ci", "mu0_hat", "mu1_hat",
+                      "ps", "ps_type"))
+  expect_length(out$ps, 10L)
+  expect_identical(out$ps_type, "out-of-sample")
   expect_length(out$tau_hat, 10L)
   expect_length(out$mu0_hat, 10L)
 })

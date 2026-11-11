@@ -2,7 +2,7 @@
 % Please edit documentation in R/methods_metalearners.R
 \name{cf_fit_xlearner}
 \alias{cf_fit_xlearner}
-\title{Fit an X-learner via econml}
+\title{Fit an X-learner via econml.metalearners}
 \usage{
 cf_fit_xlearner(
   X,
@@ -14,48 +14,61 @@ cf_fit_xlearner(
   model_propensity = "logistic",
   bootstrap_ci = FALSE,
   n_bootstrap = 100L,
-  trim = c(0.025, 0.975),
+  clip = .CF_PS_CLIP,
   propensity_score = NULL,
   propensity_X = NULL,
   random_state = NULL,
   binary_outcome = FALSE,
-  ...
+  params = list(),
+  propensity_params = list()
 )
 }
 \arguments{
-\item{X, T, Y, covariate_names, bootstrap_ci, n_bootstrap, random_state, binary_outcome, ...}{See \code{\link{cf_fit_slearner}}.}
+\item{X, T, Y, covariate_names, bootstrap_ci, n_bootstrap, random_state, binary_outcome, params}{See \code{\link{cf_fit_slearner}}.}
 
 \item{model_outcome}{Base-learner for Stage-1 outcome regressions. Default
 \code{"ridge"}.}
 
 \item{model_final}{Base-learner for the Stage-2 CATE model.
 Default \code{NULL}, which resolves to \code{model_outcome} — i.e. the
-Stage-2 CATE learner \strong{tracks the base learner}. This mirrors
-econml's \code{XLearner}, whose \code{cate_models} default to the outcome
-models when unset. \strong{Asymmetry with \code{\link{cf_fit_drlearner}}}:
+Stage-2 CATE learner \strong{tracks the base learner}.
+\strong{Asymmetry with \code{\link{cf_fit_drlearner}}}:
 xlearner's final stage follows \code{model_outcome}, whereas drlearner's
-\code{model_final} defaults to a fixed linear (\code{"ridge"}). So passing
+\code{model_final} does not and defaults to \code{"ridge"}. So passing
 only \code{model_outcome} changes xlearner's final stage but not
-drlearner's.
-\code{NULL} reuses \code{model_outcome}.}
+drlearner's.}
 
-\item{model_propensity}{Base-learner for the Stage-2 propensity model.
+\item{model_propensity}{Base-learner for the propensity model used in the
+final blend.
 Default \code{"logistic"}.}
 
-\item{trim}{Length-2 propensity clipping bounds.}
+\item{clip}{Length-2 propensity clipping bounds.}
 
 \item{propensity_score}{Optional known PS (scalar or length-n).}
 
-\item{propensity_X}{Optional covariate subset for the propensity model.}
+\item{propensity_X}{Optional covariate subset for the propensity model.
+With \code{propensity_X} unset this is the clinical covariates alone;
+see \code{\link{cf_fit}}.}
+
+\item{propensity_params}{Hyperparameters for the propensity model.}
 }
 \value{
 A list with \code{model} (\code{list(model_path, backend)}) and
-  \code{res} conforming to the \code{cfomics_result} contract.
+  \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Two-stage metalearner (Künzel et al. 2019). \code{mu0_hat} / \code{mu1_hat}
 are the Stage-1 outcome fits; \code{tau_hat} is the Stage-3
-propensity-weighted blend (so \code{mu1 - mu0 != tau_hat} by design).
+propensity-weighted blend of the two imputed-effect fits, which is not the
+difference of the Stage-1 fits, so \code{mu1 - mu0 != tau_hat}.
+}
+\references{
+Künzel, Sekhon, Bickel & Yu (2019) Metalearners for estimating heterogeneous
+treatment effects using machine learning, \emph{PNAS} 116(10):4156-4165.
+
+Battocchi, Dillon, Hei, Lewis, Oka, Oprescu & Syrgkanis (2019) EconML: A
+Python Package for ML-Based Heterogeneous Treatment Effects Estimation,
+\url{https://github.com/py-why/EconML} (implementation).
 }
 \seealso{
 \code{\link{metalearners}}.

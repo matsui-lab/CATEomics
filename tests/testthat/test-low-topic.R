@@ -5,7 +5,7 @@
 # subsystem is not exported").
 
 test_that("ensure_*_env are not exported", {
-  ns_exports <- getNamespaceExports("cfomics")
+  ns_exports <- getNamespaceExports("CATEomics")
   expect_false("ensure_conda_env" %in% ns_exports)
   expect_false("ensure_python_env" %in% ns_exports)
 })

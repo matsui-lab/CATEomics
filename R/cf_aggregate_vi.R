@@ -11,15 +11,14 @@
 #'
 #' Consensus is Robust Rank Aggregation (Kolde 2012) via
 #' \code{RobustRankAggreg::aggregateRanks} over the per-method
-#' importance-ranked feature lists -- a rank-based consensus score
-#' (RRA p-value), not a calibrated effect estimate.
+#' importance-ranked feature lists; \code{score} is its RRA p-value.
 #'
 #' When \code{cmp} was built with \code{cf_compare(base_learners = ...)},
 #' aggregation is over the (method x base-learner) configs (keyed by the
 #' compound \code{method_base} labels), not the bare methods; pass
 #' \code{methods_subset} with those labels to restrict the set.
 #'
-#' @param cmp \code{cfomics_compare} object.
+#' @param cmp \code{cateomics_compare} object.
 #' @param top_k Integer (default \code{100L}), top-k cutoff per method
 #'   (sorted by SHAP importance).
 #' @param methods_subset Optional character vector of config labels to
@@ -27,8 +26,22 @@
 #' @param surrogate Character; which cf_interpret() surrogate to read
 #'   from. Defaults to \code{"ridge"}; \code{"xgb"} reads the TreeSHAP
 #'   output instead.
-#' @param ... Forwarded to \code{cf_interpret()}.
-#' @return Object of class \code{c("cfomics_aggregate_vi", "list")}.
+#' @param random_state Integer seed (default \code{0L}). It is the seed of
+#'   each \code{\link{cf_interpret}} fit this aggregation runs, and the value
+#'   used is recorded in \code{metadata}.
+#' @param ... Not used; naming an unknown argument is an error.
+#' @return Object of class \code{c("cateomics_aggregate_vi", "list")} with
+#'   \code{results} (the aggregated table, carrying \code{score} -- the RRA
+#'   p-value, so smaller means stronger agreement -- and the consensus rank)
+#'   and \code{metadata} (\code{method}, the configs that contributed and
+#'   the ones that failed, \code{top_k}, \code{surrogate} and
+#'   \code{random_state}). A config whose interpretation warned leaves the
+#'   warnings in \code{metadata$method_warnings}, and one that printed
+#'   something without raising a caveat leaves it in
+#'   \code{metadata$method_messages}: one named character vector per config,
+#'   the names being the condition classes and the values the messages. Both
+#'   are also reported once as the call returns, and both are \code{NULL}
+#'   when there is nothing to report.
 #' @seealso \code{\link{cf_interpret}}, \code{\link{cf_compare}}.
 #' @examples
 #' # Two R-native methods so aggregation is meaningful; small MCMC keeps bcf fast.
@@ -36,19 +49,24 @@
 #' cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
 #'                   X_baseline = c("age", "sex"),
 #'                   methods = c("grf", "bcf"), n_features = 25,
-#'                   n_burn = 10L, n_iter = 10L, n_chains = 1L)
+#'                   params = list(bcf = list(nburn = 10L, nsim = 10L,
+#'                                            n_chains = 1L)))
 #' cf_aggregate_vi(cmp, top_k = 20, surrogate = "xgb")
+#' @references
+#' Kolde, Laur, Adler & Vilo (2012) Robust rank aggregation for gene list
+#' integration and meta-analysis, \emph{Bioinformatics} 28(4):573-580.
+#'
 #' @export
 cf_aggregate_vi <- function(cmp,
                             top_k          = 100L,
                             methods_subset = NULL,
                             surrogate      = c("ridge", "xgb"),
+                            random_state   = 0L,
                             ...) {
-  if (!inherits(cmp, "cfomics_compare")) {
-    rlang::abort("cmp must be a cfomics_compare.",
-                  class = "cfomics_invalid_input")
+  if (!inherits(cmp, "cateomics_compare")) {
+    rlang::abort("cmp must be a cateomics_compare.",
+                  class = "cateomics_invalid_input")
   }
-  method    <- "rra"  # RRA is the only cross-method VI consensus.
   surrogate <- match.arg(surrogate)
   top_k     <- as.integer(top_k)[1L]
 
@@ -58,7 +76,7 @@ cf_aggregate_vi <- function(cmp,
   }
   if (length(active) == 0L) {
     rlang::abort("No active models in cmp$models for VI aggregation.",
-                  class = "cfomics_aggregate_vi_no_models")
+                  class = "cateomics_aggregate_vi_no_models")
   }
 
   # Per-method surrogate-SHAP tables. Each entry is the features data.frame
@@ -66,14 +84,42 @@ cf_aggregate_vi <- function(cmp,
   # importance so the row order is the per-method ranking.
   per_method <- list()
   failed_methods <- character(0)
+  method_warnings <- list()
+  method_messages <- list()
+  # A bad dot argument is a caller error, not a per-method failure: catching it
+  # below would turn one typo into "every method failed". Surface it once,
+  # before the loop, on the same guard cf_interpret uses.
+  .cf_reject_dots(..., .fn = "cf_aggregate_vi()")
   for (m in active) {
-    itp <- tryCatch(
-      suppressWarnings(suppressMessages(
+    # Kept apart: a warning is a caveat about the surrogate, a message is
+    # something a backend printed. Reporting the second as the first would say
+    # a caveat was raised when none was.
+    seen_w <- list(); seen_m <- list()
+    itp <- withCallingHandlers(
+      tryCatch(
+        # The per-method surrogate is refitted here, and it moves with the
+        # seed, so the seed this aggregation used is passed down and recorded
+        # rather than left at cf_interpret's default.
         cf_interpret(cmp$models[[m]], surrogate = surrogate, top_n = top_k,
-                      ...)
-      )),
-      error = function(e) NULL
+                      random_state = random_state, ...),
+        error = function(e) NULL
+      ),
+      # Collected rather than dropped: a surrogate that fitted on part of the
+      # rows is still used, and the caller has no other way to learn that.
+      warning = function(cnd) {
+        seen_w[[.cf_condition_key(cnd)]] <<- stats::setNames(
+          conditionMessage(cnd), .cf_condition_class(cnd))
+        invokeRestart("muffleWarning")
+      },
+      message = function(cnd) {
+        seen_m[[.cf_condition_key(cnd)]] <<- stats::setNames(
+          conditionMessage(cnd), .cf_condition_class(cnd))
+        invokeRestart("muffleMessage")
+      }
     )
+    # `unlist` would paste the de-duplication key onto the class name.
+    if (length(seen_w)) method_warnings[[m]] <- do.call(c, unname(seen_w))
+    if (length(seen_m)) method_messages[[m]] <- do.call(c, unname(seen_m))
     if (is.null(itp) || is.null(itp$vi[[surrogate]]) ||
         is.null(itp$vi[[surrogate]]$features) ||
         nrow(itp$vi[[surrogate]]$features) == 0L) {
@@ -91,7 +137,7 @@ cf_aggregate_vi <- function(cmp,
   if (contributing_n == 0L) {
     rlang::abort(
       "All surrogate-SHAP calls failed; nothing to aggregate.",
-      class = "cfomics_aggregate_vi_all_failed"
+      class = "cateomics_aggregate_vi_all_failed"
     )
   }
   if (contributing_n < total_n) {
@@ -100,7 +146,27 @@ cf_aggregate_vi <- function(cmp,
                 contributing_n, total_n, surrogate),
         i = sprintf("Failed methods: %s.",
                     paste(failed_methods, collapse = ", "))),
-      class = "cfomics_aggregate_vi_partial_methods"
+      class = "cateomics_aggregate_vi_partial_methods"
+    )
+  }
+
+  # Collected above rather than signalled per method, and said here: a caveat
+  # the caller cannot otherwise learn about is not a caveat that has been made.
+  # The same shape cf_compare() uses for its candidates.
+  if (length(method_warnings) > 0L) {
+    rlang::warn(
+      sprintf("%d/%d method(s) raised a warning while their surrogate was fitted: %s. See metadata$method_warnings.",
+              length(method_warnings), total_n,
+              paste(names(method_warnings), collapse = ", ")),
+      class = "cateomics_aggregate_vi_method_warnings"
+    )
+  }
+  if (length(method_messages) > 0L) {
+    rlang::inform(
+      sprintf("%d/%d method(s) printed a message: %s. See metadata$method_messages.",
+              length(method_messages), total_n,
+              paste(names(method_messages), collapse = ", ")),
+      class = "cateomics_aggregate_vi_method_messages"
     )
   }
 
@@ -109,19 +175,26 @@ cf_aggregate_vi <- function(cmp,
   structure(
     list(
       results  = result,
-      method   = method,
-      methods  = names(per_method),
+      # What was aggregated, and how, is recorded once, with the other
+      # settings. The counts come from the two lists: `length(methods)` is the
+      # number that contributed and adding `length(methods_failed)` gives the
+      # number that were asked, so neither is stored a second time.
       metadata = list(
-        method            = method,
+        method            = "rra",
         top_k             = top_k,
         methods           = names(per_method),
         methods_failed    = failed_methods,
-        n_methods_used    = contributing_n,
-        n_methods_total   = total_n,
-        surrogate         = surrogate
+        # What each config warned about while its surrogate was fitted; the
+        # fit went ahead, so this is the only place it is said.
+        method_warnings   = if (length(method_warnings) > 0L) method_warnings
+                            else NULL,
+        method_messages   = if (length(method_messages) > 0L) method_messages
+                            else NULL,
+        surrogate         = surrogate,
+        random_state      = random_state
       )
     ),
-    class = c("cfomics_aggregate_vi", "list")
+    class = c("cateomics_aggregate_vi", "list")
   )
 }
 
@@ -147,9 +220,9 @@ cf_aggregate_vi <- function(cmp,
 .aggregate_rra <- function(ranked_lists) {
   if (!requireNamespace("RobustRankAggreg", quietly = TRUE)) {
     rlang::abort(
-      c("Package 'RobustRankAggreg' is required for method = 'rra'.",
+      c("Package 'RobustRankAggreg' is required for cf_aggregate_vi().",
         i = "Install via install.packages('RobustRankAggreg')."),
-      class = "cfomics_optional_dependency_missing"
+      class = "cateomics_optional_dependency_missing"
     )
   }
   res <- RobustRankAggreg::aggregateRanks(ranked_lists)
@@ -162,15 +235,15 @@ cf_aggregate_vi <- function(cmp,
 }
 
 
-## cf_aggregate_vi returns a `cfomics_aggregate_vi` object. Pathway-level
-## interpretation of the ranked features is left to standard Bioconductor
-## tools (e.g. fgsea) via the omics-workflow vignette, not a bundled wrapper.
 
 #' @export
-print.cfomics_aggregate_vi <- function(x, top_n = 10L, ...) {
-  cat("<cfomics_aggregate_vi>: method = ", x$method,
-      ", methods aggregated = ", paste(x$methods, collapse = ", "),
+print.cateomics_aggregate_vi <- function(x, top_n = 10L, ...) {
+  cat("<cateomics_aggregate_vi>: method = ", x$metadata$method,
+      ", methods aggregated = ", paste(x$metadata$methods, collapse = ", "),
       ", features = ", nrow(x$results), "\n", sep = "")
+  # The column is an RRA p-value, so the ordering is not the one a column
+  # called "score" is usually read with.
+  cat("  score = RRA p-value; smaller = stronger agreement across methods\n")
   if (length(x$metadata$methods_failed) > 0L) {
     cat("  methods failed (skipped): ",
         paste(x$metadata$methods_failed, collapse = ", "), "\n", sep = "")

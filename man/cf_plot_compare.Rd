@@ -7,14 +7,24 @@
 cf_plot_compare(cmp, metric = "r_loss", ...)
 }
 \arguments{
-\item{cmp}{A \code{cfomics_compare} object.}
+\item{cmp}{A \code{cateomics_compare} object.}
 
-\item{metric}{Which scoreboard column to rank by (default \code{"r_loss"}).}
+\item{metric}{Which scoreboard metric to rank by (default
+\code{"r_loss"}): \code{"r_loss"}, \code{"dr_loss"},
+\code{"factual_loss"}, \code{"r_squared_score"},
+\code{"dr_squared_score"} or \code{"factual_squared_score"}. One this
+comparison did not score falls back to one it did; any other name is an
+error. The descriptive columns of the scoreboard are not metrics.}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
 A ggplot object (methods ranked best-to-worst by the metric).
+
+  The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+  themes or scales to it restyles the panel. The single colours are set as
+  constants rather than mapped, so a colour scale added afterwards does not
+  reach them.
 }
 \description{
 Ranked bar chart of a cf_compare scoreboard metric.

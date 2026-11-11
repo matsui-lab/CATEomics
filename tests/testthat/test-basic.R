@@ -11,7 +11,7 @@ test_that("parse_cf_formula validation", {
     stringsAsFactors = FALSE
   )
 
-  fit_c <- cf_fit(Y ~ T | C, data = data, method = "grf", partition = "none")
+  fit_c <- cf_fit(Y = "Y", T = "T", X_baseline = "C", data = data, method = "grf", partition = "none")
   expect_s3_class(fit_c, "cf_model")
   expect_setequal(fit_c$meta$factor_levels$C, c("a", "b", "c"))
 })

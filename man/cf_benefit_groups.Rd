@@ -8,13 +8,9 @@ cf_benefit_groups(
   model,
   method = c("median", "tertile", "quartile", "extreme_quartile", "custom"),
   thresholds = NULL,
-  honest = TRUE,
-  consensus = FALSE,
   consensus_source = NULL,
   consensus_methods = NULL,
-  consensus_q = 0.25,
-  stability_filter = FALSE,
-  stability_min_agreement = 0.5,
+  consensus_min_agreement = NULL,
   ...
 )
 }
@@ -24,51 +20,41 @@ cf_benefit_groups(
 \item{method}{One of \code{"median"} (default), \code{"tertile"},
 \code{"quartile"}, \code{"extreme_quartile"}, \code{"custom"}.}
 
-\item{thresholds}{Numeric vector for \code{method = "custom"} (sorted,
-in increasing order).}
+\item{thresholds}{Numeric vector of cut points for
+\code{method = "custom"}; it is sorted into increasing order before
+use. Passing it with any other \code{method} is an error, because the
+split would be drawn from quantiles and the thresholds ignored.}
 
-\item{honest}{Logical (default \code{TRUE}). When \code{TRUE} use OOF
-tau-hat; \code{FALSE} accept in-sample tau-hat without the warning.}
+\item{consensus_source}{A \code{cateomics_compare} object whose
+\code{metadata$oof_tau_matrix} the support is counted over. \code{NULL}
+(default) skips the calculation and leaves \code{$consensus} empty.}
 
-\item{consensus}{Logical (default \code{FALSE}). When \code{TRUE}, also
-compute per-observation cross-method consensus statistics from
-\code{consensus_source}. Only valid for select-route (single cf_model)
-inputs; passing a \code{cfomics_ensemble} object hard-errors because
-the methods have already been combined.}
+\item{consensus_methods}{Character vector of method names to count over
+(a subset of \code{colnames(consensus_source$metadata$oof_tau_matrix)});
+\code{NULL} (default) uses every method the comparison kept.}
 
-\item{consensus_source}{A \code{cfomics_compare} object whose
-\code{metadata$oof_tau_matrix} drives the consensus statistics. Ignored
-when \code{consensus = FALSE}.}
+\item{consensus_min_agreement}{Numeric in [0, 1], or \code{NULL} (default)
+to keep every sample. When given, samples whose support falls below it
+are written back as \code{NA} in \code{groups}; it requires
+\code{consensus_source}.}
 
-\item{consensus_methods}{Character vector of method names to include in
-the consensus (must be a subset of
-\code{colnames(consensus_source$metadata$oof_tau_matrix)}); \code{NULL}
-(default) uses all surviving methods. The selected subset is recorded
-in the output metadata.}
-
-\item{consensus_q}{Numeric in (0, 0.5]; quantile threshold for the
-top-q high-benefit definition used by the per-method sign agreement
-counts (default 0.25, matching the benefit-group Jaccard convention
-used by \code{cf_model_stability}).}
-
-\item{stability_filter}{Logical (default \code{FALSE}). When \code{TRUE},
-individuals flagged as unstable (by \code{consensus$unstable_flag})
-are written back as \code{NA} in \code{groups$groups}. Downstream
-differential-expression recipes drop \code{NA} rows, so this is the
-recommended hook for "stable-only" grouping on the select route.
-Requires \code{consensus = TRUE}.}
-
-\item{stability_min_agreement}{Numeric in [0, 1] (default \code{0.5}).
-When \code{stability_filter = TRUE}, individuals whose
-\code{sign_agreement} is strictly below this threshold are written
-back as \code{NA}.}
-
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-Object of class \code{c("cfomics_groups", "list")} with
+Object of class \code{c("cateomics_groups", "list")} with
   \code{groups} (integer vector), \code{labels} (character),
-  \code{thresholds}, \code{metadata}.
+  \code{thresholds}, \code{n_per_group}, \code{tau}
+  (the effects the split used), \code{consensus} (\code{NULL} unless
+  \code{consensus_source} was given) and \code{metadata}
+  (\code{method}, \code{source_method}, and \code{tau_source}, which is
+  \code{"oof"} or \code{"in-sample"}).
+
+  \code{consensus} holds \code{group_support} (one share per sample),
+  \code{methods_used} (the methods that voted), \code{K_used} (the
+  denominator) and \code{filter} (the threshold that was applied, if any,
+  and how many samples it left ungrouped). A method whose out-of-fold
+  tau-hat is unusable is reported in a message rather than listed, so that
+  not voting and not working are not the same field.
 }
 \description{
 Assigns each sample to a tau-hat-based benefit group using one of
@@ -78,8 +64,36 @@ five splits: \code{"median"} (2 groups, default), \code{"tertile"} (3),
 tau-hat from \code{\link{cf_compare}} / \code{cf_fit(partition =
 "oof")}; falls back to in-sample tau-hat with a partition warning.
 High-benefit groups collect the individuals with the largest predicted
-treatment effect (\eqn{\hat\tau}), not the best observed outcome.
+treatment effect (\eqn{\hat\tau}), not the best observed outcome. That
+rests on CATEomics' convention that a larger \code{Y} is the better outcome
+(see \code{Y} in \code{\link{cf_fit}}): for an outcome whose smaller
+values are better, fit the negated outcome, or the group labels read the
+wrong way round.
 }
+\section{How much the other methods support this split}{
+
+Given a comparison, the split that was reported can be checked against the
+other candidates: \code{consensus_source} makes the function draw the same
+kind of split on every other method's out-of-fold tau-hat and report, for
+each sample, the share of those methods that put it in the same group. It
+answers "how stable is this grouping across methods", not "which grouping
+is right".
+
+The share is counted per method as same group or not, so a sample one group
+away counts like a sample at the other end. With
+\code{method = "extreme_quartile"} the middle half is in no group: a method
+that leaves a sample ungrouped does not support it, and a sample the
+reported split left ungrouped gets \code{NA}. With
+\code{method = "custom"} the thresholds are absolute, so the same cut
+points placed on another method's tau-hat can give groups of a different
+size; the quantile splits are redrawn on each method's own quantiles.
+
+The method the groups came from is not one of the voters -- it would agree
+with itself on every sample -- and it is recognised by its tau-hat matching
+the one the split used, not by its name (a comparison may label the same
+method several times, once per base learner).
+}
+
 \examples{
 # Split patients by benefit using out-of-fold effects from a causal forest.
 se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)

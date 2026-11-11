@@ -5,28 +5,18 @@
 \title{Fit a Causal Inference Model}
 \usage{
 cf_fit(
-  formula = NULL,
   data = NULL,
   method = c("grf", "bcf", "ganite", "drlearner", "cevae", "slearner", "tlearner",
-    "xlearner", "tarnet", "dragonnet", "auto"),
+    "xlearner", "tarnet", "dragonnet"),
   Y = NULL,
   T = NULL,
   X_baseline = NULL,
-  X_rnaseq = NULL,
-  X_mirna = NULL,
-  X_methyl = NULL,
-  X_protein = NULL,
-  X_mutation = NULL,
-  X_cnv = NULL,
-  X_assays = NULL,
+  omics = NULL,
+  omics_type = NULL,
   propensity_X = NULL,
   n_bootstrap = 100L,
   bootstrap_ci = FALSE,
   random_state = 0L,
-  assay_name = 1,
-  experiments = NULL,
-  assay_cols = NULL,
-  assay_pattern = NULL,
   preprocess = TRUE,
   batch = NULL,
   feature_method = c("variance", "none", "pca", "pathway"),
@@ -35,120 +25,154 @@ cf_fit(
   pathway_method = c("gsva", "ssgsea", "plage", "zscore"),
   partition = c("oof", "none"),
   n_folds = 5L,
-  eval_nuisance = "rf",
+  eval_nuisance = "super_learner",
+  eval_library = NULL,
   eval_propensity_score = NULL,
   keep_kfold_models = FALSE,
   device = c("auto", "cpu", "gpu"),
-  trim = c(0.025, 0.975),
+  clip = NULL,
   propensity_score = NULL,
   outcome_type = c("auto", "continuous", "binary"),
-  ._skip_nuisance = FALSE,
-  ...
+  model_outcome = NULL,
+  model_final = NULL,
+  model_propensity = NULL,
+  params = NULL,
+  propensity_params = NULL,
+  eval_params = NULL
 )
 }
 \arguments{
-\item{formula}{Formula specifying the model: \code{Y ~ T | X1 + X2 + ...}
-\itemize{
-  \item Y: Outcome variable (numeric)
-  \item T: Treatment variable (binary: 0/1)
-  \item X1, X2, ...: Covariates (numeric)
-}
-For SummarizedExperiment, Y can be a gene name from the assay or a
-column from colData.}
-
 \item{data}{Data source: data.frame, SummarizedExperiment, or
 MultiAssayExperiment object.}
 
-\item{method}{Character, the causal inference method to use:
+\item{method}{Character, the causal inference method to use
+(default \code{"grf"}):
 \describe{
-  \item{"grf"}{Generalized Random Forest (R-native, recommended default)}
+  \item{"grf"}{Generalized Random Forest (R-native)}
   \item{"bcf"}{Bayesian Causal Forests (R-native, requires bcf)}
-  \item{"slearner" / "tlearner" / "xlearner"}{sklearn-backed metalearners
-    via econml (Python)}
+  \item{"slearner"}{one sklearn model on an interaction-augmented
+    design, fitted by CATEomics (Python)}
+  \item{"tlearner" / "xlearner"}{sklearn-backed metalearners via econml
+    (Python)}
   \item{"drlearner"}{Neyman-orthogonal DR-Learner (econml, Python)}
   \item{"cevae"}{Causal Effect VAE (Python/Pyro)}
   \item{"ganite"}{GAN-based ITE estimation (Python/PyTorch)}
   \item{"tarnet" / "dragonnet"}{representation-learning neural CATE
     (catenets, Python)}
-  \item{"auto"}{Automatically select the best available method}
 }}
 
-\item{Y}{Outcome column name (character scalar), for the named-args API
-(mutually exclusive with \code{formula}).}
+\item{Y}{Outcome column name (character scalar). Numeric; a 0/1 outcome is
+  a supported mode (risk difference). For a SummarizedExperiment the
+  outcome must be a column of \code{colData}; one found among the assay
+  rownames is an error (\code{cateomics_y_in_assay}).
 
-\item{T}{Treatment column name (character scalar, binary 0/1), for the
-named-args API (mutually exclusive with \code{formula}).}
+  CATEomics treats \strong{larger values of \code{Y} as the better outcome}.
+  A positive \code{tau_hat} therefore means the treatment moves the outcome
+  in the better direction, \code{\link{cf_benefit_groups}} calls the units
+  with the largest \code{tau_hat} the high-benefit group, and
+  \code{\link{cf_rule}} treats the units with the largest \code{tau_hat}.
+  If smaller values of your outcome are better -- a severity score, a
+  symptom count -- analyse the negated outcome (\code{-Y}, or
+  \code{1 - Y} for a binary outcome) so that this holds.}
+
+\item{T}{Treatment column name (character scalar). Binary: numeric 0/1, a
+logical, or a factor / character whose values are exactly "0" and "1".
+Any other labelling is an error, because which arm is the treated one is
+not inferred (\code{cateomics_treatment_not_binary}).}
 
 \item{X_baseline}{Character vector of non-omics (clinical / demographic)
 covariate column names, for the named-args API.}
 
-\item{X_rnaseq}{Character vector of feature / column names for the RNA-seq
-omics layer (named-args API).}
+\item{omics}{Which measurements form the omics block. \code{"all"} (the
+default for SummarizedExperiment / MultiAssayExperiment) takes every
+feature of every layer, \code{"none"} (the default for a data.frame) takes
+none, a character vector names the features of the single layer (or names
+a whole layer), and a named list selects per layer, e.g.
+\code{list(rnaseq = "all", methyl = c("cg001", "cg002"))}. Layer names are
+assay names (SE), experiment names (MAE) or free labels (data.frame). A
+SummarizedExperiment with several assays must name the one to use; they
+are not combined. For a MultiAssayExperiment each column carries its
+experiment's name (\code{<experiment>_<feature>}). A bare feature vector
+is refused when the container holds several layers, since it does not say
+which layer they belong to; name the layer or use a named list. A
+data.frame has no layers to name, so a single string is read as a column
+name and the names of a named list are free labels. Naming the same
+column in both \code{X_baseline} and \code{omics} is an error. The omics
+block can carry the covariates on its own: \code{X_baseline} may be left
+out. A missing value in an omics feature is dropped with a warning naming
+it when the layer is taken whole (\code{"all"}, a layer name, or a
+data.frame's omics columns). Naming the features one by one makes them
+covariates of the model, and a missing value in a named covariate --
+whether it came from \code{omics} or from \code{X_baseline} -- is an
+error.}
 
-\item{X_mirna}{Character vector of feature / column names for the miRNA
-omics layer (named-args API).}
+\item{omics_type}{Optional layer type, as a single string or a vector named
+by layer. Only the RNA-seq layers are library-size normalised. With a
+single omics layer that is the one \code{preprocess} refers to, whatever it
+is called. With several layers -- and always for a
+\code{MultiAssayExperiment} -- the layer's name decides, and the names that
+count as RNA-seq are \code{"rnaseq"}, \code{"rna"}, \code{"rna_seq"} and
+\code{"rna-seq"} (case is ignored). Any other name is treated as not
+RNA-seq, so use this argument when the name does not say what the layer is
+(e.g. \code{omics_type = c(counts = "rnaseq")}). With more than one layer,
+which layers were normalised is reported once per call.}
 
-\item{X_methyl}{Character vector of feature / column names for the
-methylation omics layer (named-args API).}
+\item{propensity_X}{Character vector of the column names a propensity is
+fitted on. \strong{Unset, it is the clinical covariates}: the ones named
+in \code{X_baseline}, after factor expansion. The omics block is left to
+the outcome models, since a propensity fitted on thousands of
+pre-treatment features is unstable and treatment is rarely assigned on
+them. A fit with no clinical covariate at all has nothing to fall back to
+but every column, which it uses after saying so
+(\code{cateomics_propensity_X_fallback}).
+It restricts two propensities: the estimator's, for the methods that fit
+a separable one (grf / bcf / drlearner / xlearner; naming it for one of
+the others emits \code{cateomics_propensity_X_ignored}), and
+\strong{the propensity slot of the evaluation nuisance that the proxy
+losses and the evaluation metrics read -- for every method, including the
+six that have no separable propensity of their own}. The outcome slots
+always see every covariate. A known \code{propensity_score} /
+\code{eval_propensity_score} fits no propensity on that side, so nothing
+is restricted there.}
 
-\item{X_protein}{Character vector of feature / column names for the
-proteomics omics layer (named-args API).}
+\item{n_bootstrap}{Integer, bootstrap replicates used when
+\code{bootstrap_ci = TRUE}, for the methods that accept it
+(s/t/x-learner, drlearner). Default 100.}
 
-\item{X_mutation}{Character vector of feature / column names for the somatic
-mutation omics layer (named-args API).}
-
-\item{X_cnv}{Character vector of feature / column names for the copy-number
-variation omics layer (named-args API).}
-
-\item{X_assays}{Named list of additional omics assays (each a vector of
-feature / column names), for MultiAssayExperiment input.}
-
-\item{propensity_X}{Optional character vector of column names to use
-for PS estimation when \code{propensity_score = NULL}.
-PS-using methods (grf/bcf/drlearner/xlearner)
-honour the subset; the others emit \code{cfomics_propensity_X_ignored}.}
-
-\item{n_bootstrap}{Integer, number of bootstrap iterations (default 100).}
-
-\item{bootstrap_ci}{Logical (default \code{FALSE}); per-method opt-in
-bootstrap CI for ATE / ITE. Only honoured
-by methods that explicitly accept it.}
+\item{bootstrap_ci}{Logical (default \code{FALSE}); a bootstrap CI for the
+ATE and the per-sample effects, resampled by CATEomics the same way for
+every method that accepts it: \code{slearner}, \code{tlearner},
+\code{xlearner} and \code{drlearner}. Asking for it with any other
+method is an error (\code{cateomics_bootstrap_unsupported}, or
+\code{cateomics_bootstrap_unsupported_nn} for the neural ones) rather than
+a silent no-op. When the method has an interval of its own that the
+request would replace, a \code{cateomics_bootstrap_overrides_native}
+warning says so.}
 
 \item{random_state}{Integer random seed for reproducibility (default
-\code{0}). When set, yields bit-identical results across runs with
-the same inputs. The caller's R \code{.Random.seed} and any
+\code{0}). With the same inputs and the same thread count it yields
+bit-identical results for every method. Three methods also depend on
+the thread count, which the seed does not reach: \code{bcf::bcf()}
+takes its thread count from the machine and combines each iteration's
+partial results in whatever order the threads finish, so the seed alone
+does not determine the draws, and the two catenets methods
+(\code{"tarnet"}, \code{"dragonnet"}) return different low-order digits
+when the thread count changes. Pass
+\code{params = list(bcf = list(n_threads = 1L))} for a bit-identical bcf
+fit; the thread count the catenets methods see is set outside R, for
+instance through \code{OMP_NUM_THREADS}. The caller's R \code{.Random.seed} and any
 Python-side RNG state touched by the backend (\code{numpy},
 \code{torch}, Python \code{random}) are saved on entry and restored
 on exit so seeding does not leak into the user's session. See the
-per-method documentation for backend-specific scope (e.g.,
-\code{ganite} touches TensorFlow's \emph{global} RNG and cannot
-save/restore it; see \code{\link{cf_fit_ganite}}).}
+per-method documentation for backend-specific scope.}
 
-\item{assay_name}{For SummarizedExperiment: name or index of assay to use
-(default 1, Bioconductor convention).}
-
-\item{experiments}{For MultiAssayExperiment: character vector of experiment
-names to include (\code{NULL} = all experiments). Only the
-RNA-seq assay (identified by experiment name \code{rnaseq} / \code{rna} /
-\code{rna_seq} or the \code{X_rnaseq} slot) is internally log-normalised;
-every other assay is passed through as supplied (normalise it externally).
-Samples are restricted to the sampleMap intersection (complete cases across
-the selected experiments).}
-
-\item{assay_cols}{For data.frame: column specification of assay features
-(character vector / integer indices / logical mask). When supplied,
-selected columns are treated as omics assay (log-CPM + feature_method
-applied). Mutually exclusive with \code{assay_pattern}.}
-
-\item{assay_pattern}{For data.frame: regular expression matched against
-column names to select assay features. Mutually exclusive
-with \code{assay_cols}.}
-
-\item{preprocess}{Logical (default \code{TRUE}). When \code{TRUE} the assay
-matrix (SE / MAE primary / df assay_cols/pattern) is preprocessed via
-log-CPM normalisation. On data.frame inputs without
-\code{assay_cols} / \code{assay_pattern}, \code{preprocess} is silently
-disabled (clinical-only path, backward compatible).}
+\item{preprocess}{Logical (default \code{TRUE}). When \code{TRUE} the omics
+block is library-size normalised (TMM then log-CPM). A
+\code{MultiAssayExperiment} is normalised layer by layer, so only its
+RNA-seq layers are; a \code{data.frame} that names a mix of RNA-seq and
+other layers is refused instead (\code{cateomics_mixed_layer_preprocess}),
+because its layers share one matrix. See \code{omics_type}. With
+\code{omics = "none"} there is nothing to normalise.}
 
 \item{batch}{Optional character: column name in colData (SE/MAE) or data
 (df) containing batch labels for \code{sva::ComBat} correction on the
@@ -173,28 +197,54 @@ data.frame and 50 for a MultiAssayExperiment (per-assay budget).}
 50 via msigdbr.}
 
 \item{pathway_method}{One of \code{"gsva"} (default), \code{"ssgsea"},
-\code{"plage"}, \code{"zscore"}; passed to \code{GSVA::gsva}.}
+\code{"plage"}, \code{"zscore"}; passed to \code{GSVA::gsva}. Scores
+for \code{newdata} are computed from the training samples and the new
+samples together, keeping the columns of the new samples.}
 
 \item{partition}{One of \code{"oof"} (default) or
 \code{"none"}. When \code{"oof"}, cf_fit runs K-fold OOF + full-data
 fit (\code{n_folds + 1} fits per method) and populates
-\code{fit$res$tau_hat_oof} and \code{fit$res$nuisance}. When \code{"none"},
-only the single full-data fit is run; \code{fit$res$tau_hat_oof} is
+\code{fit$res$tau_hat_oof}, \code{fit$res$fold_id} and
+\code{fit$res$nuisance}. When \code{"none"},
+only the single full-data fit is run; \code{fit$res$tau_hat_oof} and
+\code{fit$res$fold_id} are
 \code{NULL} but \code{fit$res$nuisance} is still populated with full-data
-in-sample nuisance.}
+in-sample nuisance. Its four fields keep their \code{*_oof} names under
+either partition, so that everything downstream reads one shape; under
+\code{"none"} the values behind those names are in-sample.}
 
-\item{n_folds}{Integer K for the stratified K-fold split when
-\code{partition = "oof"}. Default \code{5L}.}
+\item{n_folds}{Integer K, default \code{5L}. Under
+\code{partition = "oof"} it is the stratified K-fold split the
+out-of-fold effects and the nuisance are computed on. Under
+\code{partition = "none"} there are no outer folds, but it is still the
+internal split the Super Learner weights are solved on, so it changes
+\code{fit$res$nuisance} and everything downstream that reads it.}
 
-\item{eval_nuisance}{Character, base-learner name used for the evaluation
-nuisance (\code{mu0}, \code{mu1}, \code{pi}) needed by DR-based metrics in
-\code{\link{cf_evaluate}} and \code{\link{cf_interpret}}. One of
-\code{"rf"} (default), \code{"lasso"}, \code{"ridge"}, \code{"elastic_net"},
-\code{"linear"}, \code{"logistic"}, or \code{"xgboost"}.}
+\item{eval_nuisance}{Learner for the evaluation nuisance (\code{mu0},
+\code{mu1}, \code{pi}) needed by DR-based metrics in
+\code{\link{cf_evaluate}} and \code{\link{cf_interpret}}.
+\code{"super_learner"} (default) fits the members of \code{eval_library}
+and combines them with non-negative weights solved on the out-of-fold
+predictions. A single learner is also accepted: \code{"rf"},
+\code{"lasso"}, \code{"ridge"}, \code{"elastic_net"}, \code{"linear"},
+\code{"logistic"} or \code{"xgboost"}. A \code{list(outcome = ,
+propensity = )} gives the outcome and propensity slots different
+learners, and naming only one slot applies it to both. The weights are
+recorded in \code{meta$estimator$eval_sl_weights}.}
+
+\item{eval_library}{Character vector of Super Learner member names, used
+when \code{eval_nuisance = "super_learner"}. \code{NULL} (default) takes
+\code{c("mean", "ridge", "elastic_net", "lasso", "rf", "xgboost_d2",
+"xgboost_d4")}; \code{"xgboost_d2"} and \code{"xgboost_d4"} are boosted
+fits at \code{max_depth} 2 and 4. A \code{list(outcome = ,
+propensity = )} gives the two slots different libraries. Naming it
+while \code{eval_nuisance} names a single learner has no effect and
+warns (\code{cateomics_eval_library_unused}).}
 
 \item{eval_propensity_score}{Optional known propensity score (scalar in
 (0, 1) or length-n vector) used for the evaluation nuisance instead of an
-estimated one (RCT context). \code{NULL} (default) estimates it. Symmetric
+estimated one (RCT context). \code{NULL} (default) estimates it. Giving
+this together with \code{eval_nuisance$propensity} is an error. Symmetric
 with \code{\link{cf_compare}}.}
 
 \item{keep_kfold_models}{Logical (default \code{FALSE}). When \code{TRUE}
@@ -202,39 +252,108 @@ and \code{partition = "oof"}, the K per-fold fit objects are
 retained in \code{fit$fold_cache}.}
 
 \item{device}{One of \code{"auto"} (default), \code{"cpu"}, \code{"gpu"};
-forwarded to the chosen backend. For NN
-methods the backend probes \code{torch.cuda.is_available()} and
-records the resolved device in \code{meta$provenance$device_effective}.}
+forwarded to the chosen backend, which places its tensors on it.
+\code{"auto"} and \code{"gpu"} fall back to the CPU when no GPU is
+visible. The device the fit ran on is recorded in
+\code{meta$provenance$device_effective}, and
+\code{predict(newdata = )} reuses it.}
 
-\item{trim}{Numeric length-2 vector \code{c(L, U)} (default
-\code{c(0.025, 0.975)}); propensity score clipping bounds applied
-uniformly across PS-using methods via the
-\code{ClippedPropensityModel}.}
+\item{clip}{Numeric length-2 vector \code{c(L, U)}; \code{NULL} (the
+default) resolves to \code{c(0.025, 0.975)}. Propensity scores below
+\code{L} or above \code{U} are replaced by the bound, which changes the
+weights and does not drop samples. It reaches the four methods that
+estimate a propensity (\code{grf}, \code{bcf}, \code{xlearner},
+\code{drlearner}) and is applied the same way in each; naming it for any
+other method is reported, since there is no propensity to bound.}
 
 \item{propensity_score}{Optional scalar or length-\code{n} numeric
 vector of known propensity scores (RCT context).
 \code{NULL} (default) lets the backend estimate PS internally.}
 
 \item{outcome_type}{One of \code{"auto"} (default), \code{"continuous"},
-or \code{"binary"}. \code{"auto"} detects a 0/1 outcome and
-switches every method to a risk-difference / classifier outcome model,
-skipping the outcome z-score for NN backends. Force with
-\code{"binary"} / \code{"continuous"}.}
+  or \code{"binary"}. \code{"auto"} detects a 0/1 outcome and
+  switches every method to a risk-difference / classifier outcome model,
+  skipping the outcome z-score for NN backends. Force with
+  \code{"binary"} / \code{"continuous"}.
 
-\item{._skip_nuisance}{Internal flag (default \code{FALSE}) used by
-\code{cf_compare} / \code{cf_evaluate} to suppress redundant nuisance
-refit when shared K-fold nuisance is already available.}
+  With a binary outcome the estimates are not constrained to the range the
+  quantity is interpretable on: \code{tau_hat} can fall outside
+  \eqn{[-1, 1]} with \code{drlearner}, and \code{mu0_hat} / \code{mu1_hat}
+  can fall outside \eqn{[0, 1]} with \code{grf} and \code{bcf}.}
 
-\item{...}{Additional method-specific options passed to the backend.}
+\item{model_outcome, model_final, model_propensity}{Base-learner tokens for
+the methods that take pluggable learners: \code{"linear"} /
+\code{"logistic"} / \code{"lasso"} / \code{"ridge"} /
+\code{"elastic_net"} / \code{"rf"} / \code{"xgboost"}. \code{NULL}
+keeps each method's own default, which is \code{"ridge"} for
+\code{model_outcome}, \code{"logistic"} for \code{model_propensity},
+and for \code{model_final} \code{"ridge"} with \code{drlearner} or
+whatever \code{model_outcome} resolved to with \code{xlearner}. \code{"lasso"}, \code{"ridge"} and
+\code{"elastic_net"} select their penalty by cross-validation over 5
+folds of the rows they are given; a slot that would leave fewer than 5
+rows (or, for a class label, fewer than 5 of the smallest class) is
+refused, and fewer than 10 is reported. One exception: for a continuous
+outcome the Python methods give \code{"ridge"} a closed-form
+leave-one-out, which forms no folds, so neither applies to it there.}
+
+\item{params}{Hyperparameters for the fitted method, either flat
+(\code{list(num.trees = 4000)}) or keyed by method
+(\code{list(grf = list(num.trees = 4000))}).
+A method that fits more than one learner takes a block per slot:
+\code{outcome} for the S- and T-learner, \code{outcome} and
+\code{final} for the X- and DR-learner, as in
+\code{list(xlearner = list(outcome = list(alphas = c(0.1, 1))))}. These
+slot names are the method's own learners; the \code{outcome} /
+\code{propensity} pair of \code{eval_nuisance}, \code{eval_library} and
+\code{eval_params} names the evaluation nuisance instead.
+The names are the ones the
+upstream package takes, so grf's dotted spellings and bcf's
+\code{nburn} / \code{nsim} / \code{n_chains}. Unknown names abort, as
+does a random seed (\code{seed} / \code{random_seed} /
+\code{random_state}): \code{random_state} is the one argument that
+drives every draw.
+A value a Python-backed method requires to be whole is written as an R
+integer (\code{10L}, not \code{10}), because those libraries check the
+type; the R-native methods take either.}
+
+\item{propensity_params}{Hyperparameters for the propensity model
+(bcf / xlearner / drlearner).}
+
+\item{eval_params}{Hyperparameters for the evaluation nuisance models.
+With the default Super Learner the block is keyed by library member
+(\code{list(xgboost_d4 = list(nrounds = 50))}), optionally inside
+\code{list(outcome = , propensity = )}; with a single learner the block
+holds its hyperparameters directly. Those two slots are the evaluation
+nuisance's outcome and propensity models, not a method's own learners.}
 }
 \value{
 Object of class \code{"cf_model"} with components:
   \describe{
     \item{method}{Character string identifying the method used.}
-    \item{fit}{Method-specific fitted model with \code{res} containing results.}
-    \item{meta}{Metadata including formula, dimensions, and software versions.}
+    \item{res}{Numeric results: \code{tau_hat}, \code{ate},
+      \code{mu0_hat}, \code{mu1_hat}, \code{summary}, and, where the
+      method and the partition provide them, \code{tau_hat_oof},
+      \code{fold_id} (which fold held each row out),
+      \code{ate_ci}, \code{tau_ci}, \code{ci_method}, \code{ps},
+      \code{ps_type} and \code{nuisance}.}
+    \item{model}{The fitted backend container. For the Python methods this
+      holds the path the model was serialised to and the backend name.}
+    \item{meta}{Metadata: the \code{provenance} and
+      \code{estimator} buckets, plus flat entries -- \code{n},
+      \code{p}, \code{covariate_names}, \code{named_args} (the variables
+      you named), \code{spec} (the resolved method settings) and the
+      preprocessing slots the newdata path replays (\code{x_zscore},
+      \code{y_zscore}, \code{factor_levels}, \code{input_type},
+      \code{propensity_X}). The seed is
+      \code{provenance$rng_seed}; the split is
+      \code{estimator$partition}; the preprocessing \emph{record},
+      including each omics layer's selection and PCA rotation, is
+      \code{estimator$preprocess}.}
+    \item{data}{\code{X_preprocessed}, \code{Y}, \code{T}.}
+    \item{fold_cache}{Present only with
+      \code{keep_kfold_models = TRUE}.}
   }
-  See \code{\link{cfomics_result}} for the full structure specification.
+  See \code{\link{cateomics_result}} for the full structure specification.
 }
 \description{
 Fits a causal inference model using various backends with a unified API.
@@ -246,10 +365,9 @@ Supports data.frame, SummarizedExperiment, and MultiAssayExperiment objects.
 All methods estimate the \strong{Average Treatment Effect (ATE)}:
 \deqn{ATE = E[Y(1) - Y(0)]}
 where \eqn{Y(1)} and \eqn{Y(0)} are potential outcomes under treatment
-and control, respectively. A subset of methods also estimates the
-\strong{Individual Treatment Effect (ITE)} / Conditional Average
-Treatment Effect:
-\deqn{ITE_i = E[Y_i(1) - Y_i(0) \mid X_i]}
+and control, respectively. Every method also estimates the
+\strong{Conditional Average Treatment Effect}:
+\deqn{\tau(x) = E[Y_i(1) - Y_i(0) \mid X_i = x]}
 
 All methods estimate the individual/conditional treatment effect:
 \code{grf}, \code{bcf}, \code{slearner}, \code{tlearner}, \code{xlearner},
@@ -257,31 +375,22 @@ All methods estimate the individual/conditional treatment effect:
 \code{dragonnet}. \code{predict()} returns per-sample \eqn{\hat\tau} and
 potential outcomes for every method.
 
-\strong{Counterfactual outcomes \eqn{\hat y_0}, \eqn{\hat y_1}:}
-\eqn{\hat y_t} is always the \emph{modelled} counterfactual under
+\strong{Counterfactual outcomes \eqn{\hat\mu_0}, \eqn{\hat\mu_1}:}
+\eqn{\hat\mu_t} is always the \emph{modelled} counterfactual under
 \eqn{\text{do}(T=t)}, not the observed value for treated / control
 subsets.
 
-\strong{Causal Assumptions:}
-
-Valid causal inference requires:
-\enumerate{
-  \item \strong{SUTVA}: No interference between units
-  \item \strong{Ignorability}: \eqn{(Y(0), Y(1)) \perp T | X} (no unmeasured confounding)
-  \item \strong{Positivity}: \eqn{0 < P(T=1|X) < 1} for all X
-}
-
-Use \code{\link{cf_diagnostics}} on the fitted model to assess these
-assumptions (overlap, covariate balance, E-value).
-
-\strong{Method Selection Guide:}
+\strong{Methods:}
 \itemize{
-  \item \strong{grf}: heterogeneous effects, robust, R-native
-    (recommended default).
-  \item \strong{bcf}: Bayesian Additive Regression Trees with
-    regularized treatment splits.
-  \item \strong{slearner / tlearner / xlearner}: sklearn-backed
-    metalearners via econml; see \code{\link{metalearners}}.
+  \item \strong{grf}: R-native generalized random forest.
+  \item \strong{bcf}: Bayesian Causal Forests (\code{bcf::bcf}); the
+    outcome model is a BART forest and the propensity is fitted
+    separately.
+  \item \strong{slearner}: one sklearn model on a design augmented with
+    the treatment interactions, fitted by CATEomics; see
+    \code{\link{metalearners}}.
+  \item \strong{tlearner / xlearner}: sklearn-backed metalearners via
+    econml; see \code{\link{metalearners}}.
   \item \strong{drlearner}: Neyman-orthogonal DR-Learner (econml).
   \item \strong{ganite}: GAN-based ITE (PyTorch).
   \item \strong{cevae}: latent-confounding VAE, requires Pyro.
@@ -315,7 +424,28 @@ fit_se <- cf_fit(data = se, Y = "outcome", T = "treatment",
                  n_features = 40)
 }
 }
+\references{
+van der Laan, Polley & Hubbard (2007) Super Learner,
+\emph{Stat. Appl. Genet. Mol. Biol.} 6(1):Article 25 (the default evaluation
+nuisance).
+
+Robinson & Oshlack (2010) A scaling normalization method for differential
+expression analysis of RNA-seq data, \emph{Genome Biol.} 11:R25 (TMM).
+
+Chen, Chen, Lun, Baldoni & Smyth (2025) edgeR v4, \emph{Nucleic Acids Res.}
+53(2):gkaf018 (implementation).
+
+Johnson, Li & Rabinovic (2007) Adjusting batch effects in microarray
+expression data using empirical Bayes methods, \emph{Biostatistics}
+8(1):118-127 (ComBat).
+
+Hänzelmann, Castelo & Guinney (2013) GSVA: gene set variation analysis for
+microarray and RNA-Seq data, \emph{BMC Bioinformatics} 14:7.
+
+Barbie et al. (2009) Systematic RNA interference reveals that oncogenic
+KRAS-driven cancers require TBK1, \emph{Nature} 462(7269):108-112 (ssGSEA).
+}
 \seealso{
-\code{\link{cfomics_result}} for result object structure,
+\code{\link{cateomics_result}} for result object structure,
   \code{\link{cf_diagnostics}} for post-fit assumption checks
 }

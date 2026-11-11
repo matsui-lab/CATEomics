@@ -10,9 +10,8 @@ test_that("cf_fit_dragonnet smoke (catenets path)", {
   df <- data.frame(Y = Y, T = T, X)
   names(df)[3:7] <- paste0("X", 1:5)
 
-  fit <- cf_fit(Y ~ T | X1 + X2 + X3 + X4 + X5,
-                data = df, method = "dragonnet",
-                random_state = 42L, n_iter = 20L)
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2", "X3", "X4", "X5"), data = df, method = "dragonnet",
+          random_state = 42L, params = list(n_iter = 20L))
 
   expect_s3_class(fit, "cf_model")
   expect_s3_class(fit, "cf_model")

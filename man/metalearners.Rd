@@ -2,34 +2,29 @@
 % Please edit documentation in R/methods_metalearners.R
 \name{metalearners}
 \alias{metalearners}
-\title{Metalearners (S/T/X-learner) via econml}
+\title{Metalearners (S/T/X-learner)}
 \description{
-Thin R wrappers around \code{econml.metalearners.SLearner} (a cfomics
-interaction-augmented sklearn model), \code{TLearner}, and \code{XLearner}.
-Nuisance models are resolved through the shared cfomics base-learner
+S-learner fits a CATEomics interaction-augmented sklearn model directly;
+T-learner and X-learner are thin R wrappers around
+\code{econml.metalearners.TLearner} and \code{XLearner}.
+Nuisance models are resolved through the shared CATEomics base-learner
 vocabulary (see \code{inst/python/learner_factory.py}).
 }
 \details{
-All three metalearners return the full \code{cfomics_result} contract:
-\code{tau_hat}, \code{mu0_hat}, \code{mu1_hat} plus \code{ate} and summary.
+All three metalearners return \code{tau_hat}, \code{mu0_hat},
+\code{mu1_hat} and \code{ate}; \code{res$summary} is assembled centrally
+by the entry that called them.
 }
 \section{Execution model}{
 
-All Python work runs inside the cfomics basilisk environment via
-\code{.cf_py_run()} (a separate process). The fitted estimator is
+All Python work runs inside the CATEomics basilisk environment via
+\code{.cf_py_run()}. The fitted estimator is
 serialised with \code{joblib.dump()} during fit and reloaded at predict
 time, so the \code{model} pillar holds \code{list(model_path, backend)}
-rather than a live estimator. Because the worker process is ephemeral,
-seeding numpy inside it cannot leak into the caller's session and no
-RNG save/restore is needed.
-}
-
-\section{CATE constancy with linear base learners}{
-
-When every nuisance model is \code{"linear"}, the resulting CATE surface
-collapses to a constant. If you need heterogeneous CATE, use
-\code{"lasso"} / \code{"rf"} / \code{"elastic_net"} for at least the
-outcome stage, or switch to \code{grf}.
+rather than a live estimator. The worker can be the calling R process
+itself, so \code{.cf_py_run()} snapshots the Python-side generators and
+restores them afterwards; seeding numpy inside the fit does not leak into
+the caller's session.
 }
 
 \section{Base-learner backends}{

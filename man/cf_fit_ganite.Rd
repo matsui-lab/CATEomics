@@ -8,17 +8,19 @@ cf_fit_ganite(
   X,
   T,
   Y,
-  covariate_names = NULL,
   random_state = 0L,
   h_dim = 100L,
+  num_layers = 2L,
   alpha = 2,
   beta = 5,
-  iterations = 5000L,
+  iterations = 1000L,
   batch_size = 256L,
-  verbose = FALSE,
+  learning_rate = 0.001,
+  weight_decay = 1e-04,
+  d_steps = 2L,
   device = "cpu",
   binary_outcome = FALSE,
-  ...
+  params = list()
 )
 }
 \arguments{
@@ -28,42 +30,69 @@ cf_fit_ganite(
 
 \item{Y}{Numeric outcome vector.}
 
-\item{covariate_names}{Character vector of covariate names.}
-
-\item{random_state}{Integer random seed for reproducibility. The backend
-(PyTorch) seeds the numpy, torch and Python \code{random} RNGs for the fit
-inside the ephemeral basilisk worker process, so seeding does not leak into
-the user's session.}
+\item{random_state}{Integer random seed for reproducibility. It seeds the
+torch generator the networks are initialised from and the generator the
+mini-batches are drawn with; \code{.cf_py_run()} snapshots and restores
+the caller's global numpy / \code{random} / torch state around the call,
+so the seeding does not leak into the user's session.}
 
 \item{h_dim}{Integer hidden-layer width (default 100).}
 
+\item{num_layers}{Integer number of hidden layers (default \code{2}),
+in each of the two trunks and in each discriminator. Every outcome head
+adds one more hidden layer of the same width.}
+
 \item{alpha}{Numeric weight of the supervised factual loss
-\eqn{L_S^G} in the generator objective (default \code{2.0}, the
-IHDP-tuned value from the GANITE paper, Appendix Table 7).}
+\eqn{L_S^G} in the generator objective (default \code{2.0}).}
 
 \item{beta}{Numeric weight of the supervised PEHE-type loss
 \eqn{L_S^I} in the inference objective, which balances GAN
-(\eqn{V_{ITE}}) and supervised terms (default \code{5.0}, IHDP-tuned).}
+(\eqn{V_{ITE}}) and supervised terms (default \code{5.0}).}
 
-\item{iterations}{Integer number of training iterations per phase
-(default \code{5000}, the PyPI ganite upstream default; the GANITE paper
-uses 10000).}
+\item{iterations}{Integer number of steps per block (default \code{1000}).
+The counterfactual block and the ITE block each run this many.}
 
-\item{batch_size}{Integer mini-batch size (default 256).}
+\item{batch_size}{Integer mini-batch size (default 256), reduced to the
+number of rows when it exceeds them. \code{h_dim}, \code{num_layers},
+\code{iterations}, \code{batch_size} and \code{d_steps} must be at
+least 1.}
 
-\item{verbose}{Logical, print training progress.}
+\item{learning_rate}{Numeric Adam learning rate for all four networks
+(default \code{1e-3}).}
 
-\item{...}{Additional arguments forwarded to Python (currently ignored).}
+\item{weight_decay}{Numeric Adam weight decay for all four networks
+(default \code{1e-4}).}
+
+\item{d_steps}{Integer discriminator steps per counterpart step
+(default \code{2}), applied in both blocks.}
+
+\item{device}{Character, \code{"auto"} / \code{"cpu"} / \code{"gpu"}.}
+
+\item{binary_outcome}{Logical; when \code{TRUE} the outcome is treated as
+a class label and the effect is a risk difference.}
+
+\item{params}{Named list of additional hyperparameters for this method's
+backend, resolved by [cf_fit()] from its \code{params} argument.}
 }
 \value{
 A \code{cf_model_ganite} object.
 }
 \description{
-Internal fit used by \code{cf_fit(method = "ganite")}. \code{Y} is z-score
+Internal fit used by \code{cf_fit(method = "ganite")}. The model is an
+independent implementation of the published method, written for this
+package in \code{inst/python/ganite_impl.py}; no code of the authors' own
+release is used. \code{Y} is z-score
 normalized on the R side (\code{X} is standardised centrally in
-preprocessing) and the data is handed to the Python GANITE module. The
+preprocessing) and the data is handed to that module. The
 trained Inference network is serialized to disk (\code{torch.save}) under the
 package model cache; the returned object holds only the model path, and
 \code{predict(newdata = ...)} reloads it to score fresh samples.
+}
+\references{
+Yoon, Jordon & van der Schaar (2018) GANITE: Estimation of Individualized
+Treatment Effects using Generative Adversarial Nets, \emph{ICLR}.
+
+Paszke et al. (2019) PyTorch: An Imperative Style, High-Performance Deep
+Learning Library, \emph{NeurIPS} 32:8024-8035 (implementation).
 }
 \keyword{internal}

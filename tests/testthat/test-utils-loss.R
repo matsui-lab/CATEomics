@@ -1,6 +1,6 @@
 # Smoke tests for the per-observation loss wrappers.
 # Verify cache extraction + stacking materials + per-obs loss dispatch on a
-# mock cfomics_compare object. No nuisance refit involved.
+# mock cateomics_compare object. No nuisance refit involved.
 
 set.seed(456)
 .make_mock_compare <- function(n = 30L, K = 3L,
@@ -38,16 +38,16 @@ set.seed(456)
     list(scoreboard = data.frame(method = colnames(oof_tau_matrix)),
          models     = models,
          metadata   = metadata),
-    class = c("cfomics_compare", "list")
+    class = c("cateomics_compare", "list")
   )
 }
 
 
-# .cfomics_extract_compare_cache --------------------------------------------
+# .cateomics_extract_compare_cache --------------------------------------------
 
-test_that(".cfomics_extract_compare_cache returns Y, T, nuisance, oof", {
+test_that(".cateomics_extract_compare_cache returns Y, T, nuisance, oof", {
   cmp <- .make_mock_compare(n = 25L, K = 3L)
-  cache <- .cfomics_extract_compare_cache(cmp)
+  cache <- .cateomics_extract_compare_cache(cmp)
 
   expect_named(cache, c("Y", "T", "mu0_oof", "mu1_oof", "pi_oof", "m_oof",
                         "oof_tau_matrix", "methods"))
@@ -58,43 +58,43 @@ test_that(".cfomics_extract_compare_cache returns Y, T, nuisance, oof", {
   expect_setequal(cache$methods, c("m1", "m2", "m3"))
 })
 
-test_that(".cfomics_extract_compare_cache rejects non-cfomics_compare", {
+test_that(".cateomics_extract_compare_cache rejects non-cateomics_compare", {
   expect_error(
-    .cfomics_extract_compare_cache(list(scoreboard = NULL)),
-    class = "cfomics_invalid_compare_result"
+    .cateomics_extract_compare_cache(list(scoreboard = NULL)),
+    class = "cateomics_invalid_compare_result"
   )
 })
 
-test_that(".cfomics_extract_compare_cache errors when nuisance_oof missing", {
+test_that(".cateomics_extract_compare_cache errors when nuisance_oof missing", {
   cmp <- .make_mock_compare(include_nuisance = FALSE)
   expect_error(
-    .cfomics_extract_compare_cache(cmp),
-    class = "cfomics_missing_nuisance_oof"
+    .cateomics_extract_compare_cache(cmp),
+    class = "cateomics_missing_nuisance_oof"
   )
 })
 
-test_that(".cfomics_extract_compare_cache errors when oof_tau_matrix missing", {
+test_that(".cateomics_extract_compare_cache errors when oof_tau_matrix missing", {
   cmp <- .make_mock_compare(include_oof = FALSE)
   expect_error(
-    .cfomics_extract_compare_cache(cmp),
-    class = "cfomics_missing_oof_tau_matrix"
+    .cateomics_extract_compare_cache(cmp),
+    class = "cateomics_missing_oof_tau_matrix"
   )
 })
 
-test_that(".cfomics_extract_compare_cache errors when no surviving model has Y/T", {
+test_that(".cateomics_extract_compare_cache errors when no surviving model has Y/T", {
   cmp <- .make_mock_compare(include_models = FALSE)
   expect_error(
-    .cfomics_extract_compare_cache(cmp),
-    class = "cfomics_compare_cache_empty"
+    .cateomics_extract_compare_cache(cmp),
+    class = "cateomics_compare_cache_empty"
   )
 })
 
 
-# .cfomics_compute_stacking_materials ----------------------------------------
+# .cateomics_compute_stacking_materials ----------------------------------------
 
-test_that(".cfomics_compute_stacking_materials returns Yres, Tres, Y_DR", {
+test_that(".cateomics_compute_stacking_materials returns Yres, Tres, Y_DR", {
   cmp <- .make_mock_compare(n = 30L, K = 3L)
-  mats <- .cfomics_compute_stacking_materials(cmp)
+  mats <- .cateomics_compute_stacking_materials(cmp)
 
   expect_true(all(c("Yres", "Tres", "Y_DR") %in% names(mats)))
   expect_equal(length(mats$Yres), 30L)
@@ -107,14 +107,14 @@ test_that(".cfomics_compute_stacking_materials returns Yres, Tres, Y_DR", {
 })
 
 
-# .cfomics_compute_per_obs_loss_from_compare ---------------------------------
+# .cateomics_compute_per_obs_loss_from_compare ---------------------------------
 
 test_that("per-obs loss wrapper dispatches r_loss / dr_loss / factual_loss", {
   cmp <- .make_mock_compare(n = 30L, K = 2L)
 
-  r  <- .cfomics_compute_per_obs_loss_from_compare(cmp, "m1", "r_loss")
-  dr <- .cfomics_compute_per_obs_loss_from_compare(cmp, "m1", "dr_loss")
-  fl <- .cfomics_compute_per_obs_loss_from_compare(cmp, "m1", "factual_loss")
+  r  <- .cateomics_compute_per_obs_loss_from_compare(cmp, "m1", "r_loss")
+  dr <- .cateomics_compute_per_obs_loss_from_compare(cmp, "m1", "dr_loss")
+  fl <- .cateomics_compute_per_obs_loss_from_compare(cmp, "m1", "factual_loss")
 
   expect_equal(length(r), 30L)
   expect_equal(length(dr), 30L)
@@ -131,39 +131,9 @@ test_that("per-obs loss wrapper dispatches r_loss / dr_loss / factual_loss", {
 test_that("per-obs loss wrapper errors on unknown method", {
   cmp <- .make_mock_compare(n = 30L, K = 2L)
   expect_error(
-    .cfomics_compute_per_obs_loss_from_compare(cmp, "missing", "r_loss"),
-    class = "cfomics_method_not_in_compare"
+    .cateomics_compute_per_obs_loss_from_compare(cmp, "missing", "r_loss"),
+    class = "cateomics_method_not_in_compare"
   )
-})
-
-
-# .cfomics_compute_per_obs_loss_for_tau --------------------------------------
-
-test_that("per-obs loss for tau works with raw vector input", {
-  cmp <- .make_mock_compare(n = 30L, K = 3L)
-  tau_ens <- rowMeans(cmp$metadata$oof_tau_matrix)
-
-  r_ens <- .cfomics_compute_per_obs_loss_for_tau(cmp, tau_ens, "r_loss")
-  expect_equal(length(r_ens), 30L)
-  expect_true(all(is.finite(r_ens)))
-})
-
-test_that("per-obs loss for tau errors on length mismatch", {
-  cmp <- .make_mock_compare(n = 30L, K = 3L)
-  expect_error(
-    .cfomics_compute_per_obs_loss_for_tau(cmp, rep(0, 10L), "r_loss"),
-    class = "cfomics_tau_length_mismatch"
-  )
-})
-
-
-# Sanity equivalence: r_loss(tau_m) from method dispatch == from tau vector
-test_that("dispatch-by-method and dispatch-by-vector agree", {
-  cmp <- .make_mock_compare(n = 30L, K = 3L)
-  tau_m1 <- cmp$metadata$oof_tau_matrix[, "m1"]
-  r_by_method <- .cfomics_compute_per_obs_loss_from_compare(cmp, "m1", "r_loss")
-  r_by_tau    <- .cfomics_compute_per_obs_loss_for_tau(cmp, tau_m1, "r_loss")
-  expect_true(all(abs(r_by_method - r_by_tau) < 1e-12))
 })
 
 
@@ -194,7 +164,7 @@ test_that(".compute_r_squared_score is a no-op when per_obs is fully finite", {
   set.seed(3)
   per  <- runif(50, 0.1, 0.5)
   base <- runif(50, 0.3, 0.9)
-  got  <- cfomics:::.compute_r_squared_score(per, base)
+  got  <- CATEomics:::.compute_r_squared_score(per, base)
   expect_equal(got, 1 - mean(per) / mean(base))
 })
 
@@ -203,10 +173,83 @@ test_that(".compute_r_squared_score masks base to the finite per_obs subset", {
   base <- c(0.5, 0.5, 0.5, 0.5, 0.5)
   ok   <- is.finite(per)
   # denominator must average base over the SAME finite subset, not all 5 obs.
-  expect_equal(cfomics:::.compute_r_squared_score(per, base),
+  expect_equal(CATEomics:::.compute_r_squared_score(per, base),
                1 - mean(per[ok]) / mean(base[ok]))
 })
 
 test_that(".compute_r_squared_score returns NA when no finite overlap", {
-  expect_true(is.na(cfomics:::.compute_r_squared_score(rep(NA_real_, 5), 1:5)))
+  expect_true(is.na(CATEomics:::.compute_r_squared_score(rep(NA_real_, 5), 1:5)))
+})
+
+
+# dr_loss / factual_loss: minimised where the definition says they are ----
+#
+# The dispatch test above only checks length, finiteness and non-negativity,
+# all of which hold for any squared residual. These pin what is being
+# squared, in the same shape as the theta* test for the R-loss.
+
+test_that("the DR pseudo-outcome is the AIPW contrast", {
+  # Both places that use this helper build their expectation by calling it,
+  # so a sign error or a swapped arm would pass either of them. Write the
+  # augmented inverse-probability formula out by hand and compare.
+  set.seed(11)
+  n <- 200L
+  T_vec  <- stats::rbinom(n, 1L, 0.5)
+  pi_oof <- stats::runif(n, 0.2, 0.8)
+  mu0    <- stats::rnorm(n)
+  mu1    <- mu0 + 0.5
+  Y      <- ifelse(T_vec == 1L, mu1, mu0) + stats::rnorm(n, sd = 0.3)
+
+  by_hand <- (mu1 - mu0) +
+    T_vec * (Y - mu1) / pi_oof -
+    (1 - T_vec) * (Y - mu0) / (1 - pi_oof)
+  expect_equal(.compute_dr_pseudo_outcome(Y, T_vec, mu0, mu1, pi_oof),
+               by_hand, tolerance = 1e-12)
+
+  # A closed form that pins both arms at once: with no outcome model and a
+  # coin flip, the contrast collapses to 2 Y (2T - 1).
+  z <- rep(0, n)
+  expect_equal(.compute_dr_pseudo_outcome(Y, T_vec, z, z, rep(0.5, n)),
+               2 * Y * (2 * T_vec - 1), tolerance = 1e-12)
+
+  # Unbiased for the ATE when the nuisances are the truth, which a swapped
+  # arm or a dropped augmentation term would break.
+  expect_equal(mean(.compute_dr_pseudo_outcome(Y, T_vec, mu0, mu1, pi_oof)),
+               0.5, tolerance = 0.15)
+})
+
+test_that("dr_loss is minimised at tau_hat equal to the DR pseudo-outcome", {
+  set.seed(7)
+  n <- 200L
+  T_vec  <- stats::rbinom(n, 1L, 0.5)
+  pi_oof <- rep(0.5, n)
+  mu0    <- stats::rnorm(n)
+  mu1    <- mu0 + 0.5
+  Y      <- ifelse(T_vec == 1L, mu1, mu0) + stats::rnorm(n, sd = 0.3)
+  Y_DR   <- .compute_dr_pseudo_outcome(Y, T_vec, mu0, mu1, pi_oof)
+
+  loss <- function(tau) mean(.compute_dr_loss_per_obs(Y, T_vec, mu0, mu1,
+                                                      pi_oof, tau))
+  expect_equal(loss(Y_DR), 0, tolerance = 1e-12)
+  expect_gt(loss(Y_DR + 0.5), 0.2)
+  expect_gt(loss(rep(0, n)), loss(Y_DR))
+  # Discarding the pseudo-outcome (squaring tau alone) would not be zero here.
+  expect_lt(loss(Y_DR), mean(Y_DR^2))
+})
+
+test_that("factual_loss squares the error on the arm that was observed", {
+  set.seed(8)
+  n <- 200L
+  T_vec  <- stats::rbinom(n, 1L, 0.5)
+  pi_oof <- rep(0.5, n)
+  mu0    <- stats::rnorm(n)
+  mu1    <- stats::rnorm(n)
+  # Y taken from the arm each unit is in: predicting that arm is exact.
+  Y <- ifelse(T_vec == 1L, mu1, mu0)
+
+  exact   <- mean(.compute_factual_loss_per_obs(Y, T_vec, mu0, mu1))
+  swapped <- mean(.compute_factual_loss_per_obs(Y, T_vec, mu1, mu0))
+  expect_equal(exact, 0, tolerance = 1e-12)
+  # Ignoring the treated arm, or reading the wrong one, shows up here.
+  expect_gt(swapped, 0.5)
 })

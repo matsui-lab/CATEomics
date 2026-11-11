@@ -15,8 +15,8 @@ cf_fit_grf(
   estimate.variance = TRUE,
   propensity_score = NULL,
   propensity_X = NULL,
-  trim = c(0.025, 0.975),
-  ...
+  clip = .CF_PS_CLIP,
+  params = list()
 )
 }
 \arguments{
@@ -37,27 +37,36 @@ does not leak into the user's session.}
 (default \code{2000}).}
 
 \item{tune.parameters}{Character, which GRF parameters to tune;
-default \code{"none"}. This
-matches the grf upstream default and keeps cfomics' method
-comparison framework "tuning-OFF for all methods" (only DML /
-DR / catenets / etc. parametric backends select their
-`model_*` base learner, which is hyperparameter-fixed lasso by
-default). Pass \code{"all"} to opt into grf cross-validation
-tuning; note that for small training folds (n <~ 200) auto-tune
-may abort with grf's "honesty fraction is too close to 1 or 0"
-error — refer to grf docs for guidance. Forwarded to both
+default \code{"none"} (the grf default). Pass \code{"all"} for grf
+cross-validation tuning. Forwarded to both
 \code{regression_forest} (W.hat / Y.hat nuisance) and
 \code{causal_forest} (CATE forest).}
 
 \item{estimate.variance}{Logical, whether \code{predict.causal_forest}
 should return variance estimates (default \code{TRUE}).}
 
-\item{...}{Additional arguments forwarded to
-\code{grf::causal_forest()}.}
+\item{propensity_score}{Known propensity score: a scalar in (0, 1) or a
+length-n vector. \code{NULL} (default) estimates it internally.}
+
+\item{propensity_X}{Optional character vector of covariate names to
+restrict the propensity model to. Reached through \code{\link{cf_fit}} or
+\code{\link{cf_compare}}, leaving it unset fits the propensity on the
+clinical covariates alone; called directly, \code{NULL} means every
+column of the design matrix.}
+
+\item{clip}{Length-2 numeric, the bounds the propensity is held within
+(default \code{c(0.025, 0.975)}). Values are replaced by the bound; no
+sample is dropped.}
+
+\item{params}{Named list of extra arguments. \code{params$nuisance}
+configures the orthogonalization forests; everything else goes to
+\code{grf::causal_forest()}. Names are checked on the R side against the
+arguments of this fitter and of \code{grf::causal_forest()}, so an
+unknown name aborts before the forest is grown.}
 }
 \value{
 A list with \code{model} (the fitted \code{grf::causal_forest}
-  object) and \code{res} conforming to the \code{cfomics_result} contract.
+  object) and \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Two-stage orthogonalized causal forest following Athey, Tibshirani & Wager
@@ -67,7 +76,7 @@ Two-stage orthogonalized causal forest following Athey, Tibshirani & Wager
 residualized scores.
 }
 \details{
-Returns the full \code{cfomics_result} contract (\code{tau_hat},
+Returns the full \code{cateomics_result} contract (\code{tau_hat},
 \code{mu0_hat}, \code{mu1_hat}, \code{ate} and summary). The ATE and its
 95\% Wald CI come
 from \code{grf::average_treatment_effect()} (doubly-robust score), not
@@ -75,8 +84,7 @@ from \eqn{\bar{\hat\tau}(X)}.
 
 Binary (0/1) outcomes are modelled on the native continuous scale, so the
 estimand is the risk difference; the counterfactual means may fall outside
-\eqn{[0, 1]}. For a proper binary likelihood use a meta/DR learner
-(classifier nuisance) or a neural method.
+\eqn{[0, 1]}.
 
 
 The potential-outcome surfaces are reconstructed from the residualized
@@ -86,8 +94,8 @@ decomposition:
 which satisfies \eqn{\hat y_1 - \hat y_0 = \hat\tau(X)} exactly by
 construction.
 }
-\section{Potential outcomes (Class C}{
- Robinson residualization):
+\section{Potential outcomes -- Class C, Robinson residualization}{
+
 \code{mu0_hat = Y.hat - W.hat * tau_hat}, \code{mu1_hat = Y.hat +
 (1 - W.hat) * tau_hat}, where \code{Y.hat = E[Y|X]} is a single outcome
 regression and \code{W.hat} is the propensity estimate (Robinson
@@ -96,7 +104,15 @@ regression and \code{W.hat} is the propensity estimate (Robinson
 \strong{NOTE}: \code{mu_t} are reconstructed from the single
 \code{Y.hat} model + residualisation — \emph{not} separate outcome
 regressions per arm. The DR-score ATE may differ from
-\code{mean(ite)}; cfomics uses \code{grf::average_treatment_effect()}.
+\code{mean(ite)}; CATEomics uses \code{grf::average_treatment_effect()}.
 }
 
+\references{
+Athey, Tibshirani & Wager (2019) Generalized Random Forests,
+\emph{Ann. Statist.} 47(2):1148-1178.
+
+Robinson (1988) Root-N-Consistent Semiparametric Regression,
+\emph{Econometrica} 56(4):931-954 (the residualisation the potential
+outcomes are reconstructed with).
+}
 \keyword{internal}

@@ -2,7 +2,7 @@
 % Please edit documentation in R/methods_metalearners.R
 \name{cf_fit_slearner}
 \alias{cf_fit_slearner}
-\title{Fit an S-learner via econml}
+\title{Fit an S-learner}
 \usage{
 cf_fit_slearner(
   X,
@@ -14,7 +14,7 @@ cf_fit_slearner(
   n_bootstrap = 100L,
   random_state = NULL,
   binary_outcome = FALSE,
-  ...
+  params = list()
 )
 }
 \arguments{
@@ -30,8 +30,9 @@ cf_fit_slearner(
 Default \code{"ridge"}.}
 
 \item{bootstrap_ci}{Logical. When \code{TRUE}, compute percentile CIs from
-\code{n_bootstrap} refits (inside the basilisk process). Default
-\code{FALSE}.}
+\code{n_bootstrap} refits (inside the basilisk process). The resampling
+is implemented in CATEomics and is the same for every method that accepts
+it. Default \code{FALSE}.}
 
 \item{n_bootstrap}{Integer bootstrap replicates. Default \code{100}.}
 
@@ -41,17 +42,28 @@ numpy inside the basilisk process.}
 \item{binary_outcome}{Logical. When \code{TRUE} the outcome model is a
 probability classifier so \code{mu1 - mu0} is a risk difference.}
 
-\item{...}{Ignored.}
+\item{params}{Named list with an optional \code{outcome} (and, for
+x-learner, \code{final}) block of hyperparameters for the base learners.
+A block reaches the scikit-learn estimator built in
+\code{inst/python/learner_factory.py}, which raises on a hyperparameter
+it does not take. A flat entry is refused on the R side, because these
+methods read the blocks only and it would have nowhere to go.
+A value the Python side requires to be whole is written as an R
+integer (\code{10L}, not \code{10}), which R otherwise makes a double.}
 }
 \value{
 A list with \code{model} (\code{list(model_path, backend)}) and
-  \code{res} conforming to the \code{cfomics_result} contract.
+  \code{res} conforming to the \code{cateomics_result} contract.
 }
 \description{
 Fits a single outcome model on the interaction-augmented
-\code{[X | T | X*T]} matrix (a cfomics S-learner variant that guarantees
-heterogeneous CATE for any base learner). Potential outcomes are read back
+\code{[X | T | X*T]} matrix, so the fitted surface is not constant in
+\code{X} even for a linear base learner. Potential outcomes are read back
 by setting the \code{T} column to 1 / 0.
+}
+\references{
+Künzel, Sekhon, Bickel & Yu (2019) Metalearners for estimating heterogeneous
+treatment effects using machine learning, \emph{PNAS} 116(10):4156-4165.
 }
 \seealso{
 \code{\link{metalearners}}.

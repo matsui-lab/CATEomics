@@ -7,20 +7,20 @@
 # * https://testthat.r-lib.org/articles/special-files.html
 
 library(testthat)
-library(cfomics)
+library(CATEomics)
 
 ## Sub-commit 6 (2026-05-24): also write the full per-test stream to a
 ## sibling log file so that R CMD check's `Last 13 lines` summary can be
 ## augmented when diagnosing fails under the installed-package context.
 ## Default `summary` reporter still controls the stdout the check
 ## harness consumes; the extra log is only used during fix iteration.
-log_path <- Sys.getenv("CFOMICS_TESTTHAT_LOG", "")
+log_path <- Sys.getenv("CATEOMICS_TESTTHAT_LOG", "")
 if (nzchar(log_path)) {
   reporter <- testthat::MultiReporter$new(reporters = list(
     testthat::SummaryReporter$new(),
     testthat::TapReporter$new(file = log_path)
   ))
-  test_check("cfomics", reporter = reporter)
+  test_check("CATEomics", reporter = reporter)
 } else {
-  test_check("cfomics")
+  test_check("CATEomics")
 }

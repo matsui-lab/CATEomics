@@ -37,19 +37,19 @@ create_minimal_se_counts <- function(n_samples = 30, n_genes = 20, seed = 42) {
 }
 
 # -----------------------------------------------------------------------------
-# df-path assay_cols / assay_pattern
+# df-path omics selection
 # -----------------------------------------------------------------------------
 
-test_that("assay_cols + assay_pattern mutual exclusion", {
+test_that("omics rejects a column that is not in the data", {
   df <- data.frame(Y = rnorm(20), T = rbinom(20, 1, 0.5), X = rnorm(20))
   expect_error(
-    cf_fit(Y ~ T | X, data = df, method = "grf", partition = "none",
-           assay_cols = "X", assay_pattern = "^X"),
-    class = "cfomics_input_conflict"
+    cf_fit(Y = "Y", T = "T", X_baseline = "X", data = df, method = "grf", partition = "none",
+           omics = "not_a_column"),
+    class = "cateomics_omics_columns_missing"
   )
 })
 
-test_that("df + assay_cols selects assay features", {
+test_that("df + omics selects assay features", {
   set.seed(1)
   df <- data.frame(
     Y  = rnorm(30),
@@ -58,18 +58,19 @@ test_that("df + assay_cols selects assay features", {
   )
   for (g in paste0("gene", 1:10)) df[[g]] <- rnorm(30)
   fit <- cf_fit(
-    Y ~ T | age, data = df, method = "grf", partition = "none",
-    assay_cols = paste0("gene", 1:10),
+    Y = "Y", T = "T", X_baseline = "age", data = df, method = "grf", partition = "none",
+    omics = paste0("gene", 1:10),
     preprocess = FALSE
   )
   expect_s3_class(fit, "cf_model")
   expect_equal(fit$meta$input_type, "data.frame")
-  expect_equal(fit$meta$assay_spec$assay_cols, paste0("gene", 1:10))
+  expect_equal(fit$meta$estimator$preprocess$layers$omics$features,
+               paste0("gene", 1:10))
   # X = age + 10 genes = 11 columns
   expect_equal(fit$meta$p, 11)
 })
 
-test_that("df + assay_pattern selects via regex", {
+test_that("df + omics = 'all' takes every non-baseline column", {
   set.seed(2)
   df <- data.frame(
     Y   = rnorm(30),
@@ -78,60 +79,31 @@ test_that("df + assay_pattern selects via regex", {
   )
   for (g in paste0("ENSG", sprintf("%05d", 1:8))) df[[g]] <- rnorm(30)
   fit <- cf_fit(
-    Y ~ T | age, data = df, method = "grf", partition = "none",
-    assay_pattern = "^ENSG",
+    data = df, Y = "Y", T = "T", X_baseline = "age",
+    method = "grf", partition = "none",
+    omics = "all",
     preprocess = FALSE
   )
   expect_s3_class(fit, "cf_model")
-  expect_equal(fit$meta$assay_spec$assay_pattern, "^ENSG")
+  expect_setequal(fit$meta$estimator$preprocess$layers$omics$features,
+                  paste0("ENSG", sprintf("%05d", 1:8)))
   expect_equal(fit$meta$p, 9)  # age + 8 genes
 })
 
-test_that("feature_method = 'pathway' is gated behind GSVA", {
-  set.seed(3)
-  df <- data.frame(
-    Y  = rnorm(30),
-    T  = rbinom(30, 1, 0.5),
-    age = rnorm(30, 50, 10)
-  )
-  for (g in paste0("gene", 1:10)) df[[g]] <- rnorm(30)
-
-  # Skip when GSVA is not installed. When installed, whether the fit succeeds
-  # depends on the gene set and sample size, so this only smoke-checks that the
-  # feature_method integration and pathway dispatch run.
-  skip_if_not_installed("GSVA")
-  skip_if_not_installed("msigdbr")
-  # The Hallmark 50 gene set needs ENSG / SYMBOL matches; on this toy data a
-  # zero match is likely, so catch any exception and only verify dispatch.
-  err <- tryCatch(
-    cf_fit(
-      Y ~ T | age, data = df, method = "grf", partition = "none",
-      assay_cols = paste0("gene", 1:10),
-      preprocess = FALSE,
-      feature_method = "pathway"
-    ),
-    error = function(e) e,
-    warning = function(w) w
-  )
-  # With zero pathway matches GSVA may error or return an empty matrix; it is
-  # enough here that the pathway dispatch either runs or stops with an
-  # exception.
-  expect_true(inherits(err, c("error", "warning", "cf_model")))
-})
 
 # -----------------------------------------------------------------------------
 # Y leakage hard error
 # -----------------------------------------------------------------------------
 
-test_that("SE: Y in assay rownames raises cfomics_y_in_assay", {
+test_that("SE: Y in assay rownames raises cateomics_y_in_assay", {
   se <- create_minimal_se_counts(n_samples = 20, n_genes = 10)
   # rename one assay row to match outcome column name in colData
   expect_error(
     cf_fit(
-      gene1 ~ treatment | age, data = se,
+      Y = "gene1", T = "treatment", X_baseline = "age", data = se,
       method = "grf", partition = "none", preprocess = FALSE
     ),
-    class = "cfomics_y_in_assay"
+    class = "cateomics_y_in_assay"
   )
 })
 
@@ -139,20 +111,23 @@ test_that("SE: Y in assay rownames raises cfomics_y_in_assay", {
 # PCA loadings saved
 # -----------------------------------------------------------------------------
 
-test_that("feature_method = 'pca' populates meta$pca_loadings", {
+test_that("feature_method = 'pca' records the rotation on the layer", {
   se <- create_minimal_se_counts(n_samples = 40, n_genes = 30)
   fit <- cf_fit(
-    outcome ~ treatment | age, data = se,
+    Y = "outcome", T = "treatment", X_baseline = "age", data = se,
     method = "grf", partition = "none",
     preprocess = FALSE,
     feature_method = "pca",
     n_features = 5
   )
   expect_s3_class(fit, "cf_model")
-  expect_true(!is.null(fit$meta$pca_loadings))
-  expect_equal(ncol(fit$meta$pca_loadings), 5)
+  # The rotation belongs to the layer it was fitted on.
+  lrec <- fit$meta$estimator$preprocess$layers[[1L]]
+  expect_true(!is.null(lrec$pca_loadings))
+  expect_equal(ncol(lrec$pca_loadings), 5)
   # rotation matrix should have one row per gene
-  expect_equal(nrow(fit$meta$pca_loadings), 30)
+  expect_equal(nrow(lrec$pca_loadings), 30)
+  expect_null(fit$meta$pca_loadings)
 })
 
 # -----------------------------------------------------------------------------
@@ -160,7 +135,7 @@ test_that("feature_method = 'pca' populates meta$pca_loadings", {
 # -----------------------------------------------------------------------------
 
 # meta$rowdata (full rowData table) is not part of the result contract;
-# rowData round-trips via as_cf_data / cf_attach_results instead.
+# rowData round-trips via cf_attach_results instead.
 
 # -----------------------------------------------------------------------------
 # input_type recording
@@ -168,12 +143,12 @@ test_that("feature_method = 'pca' populates meta$pca_loadings", {
 
 test_that("meta$input_type reflects data class", {
   df <- data.frame(Y = rnorm(20), T = rbinom(20, 1, 0.5), X = rnorm(20))
-  fit_df <- cf_fit(Y ~ T | X, data = df, method = "grf", partition = "none")
+  fit_df <- cf_fit(Y = "Y", T = "T", X_baseline = "X", data = df, method = "grf", partition = "none")
   expect_equal(fit_df$meta$input_type, "data.frame")
 
   se <- create_minimal_se_counts(n_samples = 30, n_genes = 10)
   fit_se <- cf_fit(
-    outcome ~ treatment | age, data = se,
+    Y = "outcome", T = "treatment", X_baseline = "age", data = se,
     method = "grf", partition = "none", preprocess = FALSE
   )
   expect_equal(fit_se$meta$input_type, "SE")
@@ -186,7 +161,7 @@ test_that("meta$input_type reflects data class", {
 test_that("cf_model$data$X_preprocessed is stored", {
   set.seed(4)
   df <- data.frame(Y = rnorm(30), T = rbinom(30, 1, 0.5), X = rnorm(30))
-  fit <- cf_fit(Y ~ T | X, data = df, method = "grf", partition = "none")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = "X", data = df, method = "grf", partition = "none")
   expect_true(!is.null(fit$data))
   expect_true(is.matrix(fit$data$X_preprocessed))
   expect_equal(nrow(fit$data$X_preprocessed), 30)
@@ -206,7 +181,7 @@ test_that("factor covariates produce one-hot + factor_levels", {
     sex = sample(c("M", "F"), 40, replace = TRUE),
     stringsAsFactors = FALSE
   )
-  fit <- cf_fit(Y ~ T | sex, data = df, method = "grf", partition = "none")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = "sex", data = df, method = "grf", partition = "none")
   expect_s3_class(fit, "cf_model")
   expect_true(!is.null(fit$meta$factor_levels))
   expect_setequal(fit$meta$factor_levels$sex, c("F", "M"))
@@ -224,10 +199,8 @@ test_that("NN methods populate meta$y_zscore", {
   df <- data.frame(Y = rnorm(60), T = rbinom(60, 1, 0.5))
   for (g in paste0("X", 1:5)) df[[g]] <- rnorm(60)
 
-  fit_tar <- cf_fit(
-    Y ~ T | X1 + X2 + X3 + X4 + X5, data = df,
-    method = "tarnet", random_state = 42L, n_iter = 50L
-  )
+  fit_tar <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2", "X3", "X4", "X5"), data = df, method = "tarnet",
+          random_state = 42L, params = list(n_iter = 50L))
   expect_true(!is.null(fit_tar$meta$y_zscore))
   expect_true(is.numeric(fit_tar$meta$y_zscore$Y_mean))
   expect_true(is.numeric(fit_tar$meta$y_zscore$Y_sd))
@@ -240,10 +213,8 @@ test_that("cevae populates central x_zscore and NN y_zscore", {
   set.seed(7)
   df <- data.frame(Y = rnorm(40), T = rbinom(40, 1, 0.5))
   for (g in paste0("X", 1:3)) df[[g]] <- rnorm(40)
-  fit <- cf_fit(
-    Y ~ T | X1 + X2 + X3, data = df,
-    method = "cevae", random_state = 42L, num_epochs = 5L
-  )
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2", "X3"), data = df, method = "cevae",
+          random_state = 42L, params = list(num_epochs = 5L))
   expect_true(!is.null(fit$meta$y_zscore))
   expect_true(!is.null(fit$meta$x_zscore))
   expect_equal(length(fit$meta$x_zscore$X_mean), 3)
@@ -261,7 +232,7 @@ test_that("newdata factor_levels re-apply works", {
     sex = sample(c("M", "F"), 40, replace = TRUE),
     stringsAsFactors = FALSE
   )
-  fit <- cf_fit(Y ~ T | sex, data = df_train, method = "grf", partition = "none")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = "sex", data = df_train, method = "grf", partition = "none")
 
   df_new <- data.frame(
     sex = c("M", "F", "M"),
@@ -291,7 +262,7 @@ test_that(".apply_lognorm returns log-CPM + norm_method when edgeR is available"
   rownames(counts) <- paste0("g", seq_len(nrow(counts)))
   colnames(counts) <- paste0("s", seq_len(ncol(counts)))
 
-  out <- cfomics:::.apply_lognorm(counts, input_type = "SE", preprocess = TRUE)
+  out <- CATEomics:::.apply_lognorm(counts, input_type = "SE", preprocess = TRUE)
   expect_true(out$enabled)
   expect_equal(out$method, "logcpm")
   expect_equal(out$norm_method, "TMM")
@@ -308,7 +279,7 @@ test_that(".apply_lognorm returns log-CPM + norm_method when edgeR is available"
 test_that(".apply_lognorm honors preprocess = FALSE (no-op)", {
   counts <- matrix(1:60, nrow = 6, ncol = 10)
   rownames(counts) <- paste0("g", 1:6)
-  out <- cfomics:::.apply_lognorm(counts, preprocess = FALSE)
+  out <- CATEomics:::.apply_lognorm(counts, preprocess = FALSE)
   expect_false(out$enabled)
   expect_identical(out$assay, counts)
 })
@@ -327,7 +298,7 @@ test_that(".apply_combat corrects log-scale values via sva::ComBat", {
   colnames(expr) <- paste0("s", 1:30)
   batch_vec <- rep(c("A", "B"), each = 15)
 
-  out <- cfomics:::.apply_combat(expr, batch_vec = batch_vec,
+  out <- CATEomics:::.apply_combat(expr, batch_vec = batch_vec,
                                  batch_label = "batch")
   expect_true(out$batch_corrected)
   expect_equal(out$batch_method, "combat")
@@ -337,7 +308,116 @@ test_that(".apply_combat corrects log-scale values via sva::ComBat", {
 
 test_that(".apply_combat is a no-op when batch is NULL", {
   expr <- matrix(rnorm(12 * 10), nrow = 12)
-  out <- cfomics:::.apply_combat(expr, batch_vec = NULL)
+  out <- CATEomics:::.apply_combat(expr, batch_vec = NULL)
   expect_false(out$batch_corrected)
   expect_identical(out$assay, expr)
+})
+
+
+# Pathway scores are anchored to the training cohort -----------------------
+
+.pathway_se <- function(tag, n, seed) {
+  set.seed(seed)
+  genes <- paste0("G", 1:60)
+  m <- matrix(rpois(60L * n, 50), 60,
+              dimnames = list(genes, paste0(tag, seq_len(n))))
+  SummarizedExperiment::SummarizedExperiment(
+    assays  = list(expr = m),
+    colData = S4Vectors::DataFrame(
+      Y = rnorm(n), T = rbinom(n, 1L, 0.5), age = rnorm(n),
+      row.names = paste0(tag, seq_len(n))))
+}
+
+test_that("newdata pathway scores land where the training scores would put them", {
+  skip_if_not_installed("SummarizedExperiment")
+  skip_if_not_installed("GSVA")
+  skip_if_not_installed("edgeR")
+  gs <- list(setA = paste0("G", 1:15), setB = paste0("G", 16:30),
+             setC = paste0("G", 31:45))
+  all_se <- .pathway_se("s", 60L, 1L)
+  tr <- all_se[, 1:52]
+  te <- all_se[, 53:60]
+
+  fit <- suppressMessages(cf_fit(
+    data = tr, Y = "Y", T = "T", X_baseline = "age", omics = "all",
+    method = "grf", feature_method = "pathway", pathway_method = "gsva",
+    gene_sets = gs, partition = "none", random_state = 1L))
+
+  prep <- fit$meta$estimator$preprocess
+  # The block the chain is re-run against is kept, because every GSVA method
+  # reads the other samples. It belongs to the layer it came from, whatever
+  # the container was, so there is one place to look for it.
+  expect_null(prep$train_omics)
+  lyr <- names(prep$layers)[[1L]]
+  expect_false(is.null(prep$layers[[lyr]]$train_omics))
+  expect_equal(ncol(prep$layers[[lyr]]$train_omics), 52L)
+  expect_identical(CATEomics:::.cf_layer_train_omics(prep, lyr),
+                   prep$layers[[lyr]]$train_omics)
+
+  nd <- suppressMessages(CATEomics:::.apply_newdata_preprocessing(
+    fit, CATEomics:::.extract_X_from_bioc_newdata(fit, te)))
+
+  # What the eight samples would have scored had they been in the fit: run
+  # the whole chain once on all sixty and read their columns off. Scoring
+  # them against the stored block has to reproduce exactly that.
+  counts_all <- SummarizedExperiment::assay(all_se, "expr")
+  lc_all <- CATEomics:::.apply_lognorm(counts_all, input_type = "SE",
+                                     preprocess = TRUE)$assay
+  oracle <- suppressMessages(CATEomics:::.cf_gsva_scores(lc_all, gs, "gsva"))
+  expected <- t(oracle[prep$selected_features, 53:60, drop = FALSE])
+  xs  <- fit$meta$x_zscore
+  idx <- match(prep$selected_features, names(xs$X_mean))
+  expected <- sweep(sweep(expected, 2, xs$X_mean[idx], "-"),
+                    2, xs$X_sd[idx], "/")
+  got <- as.matrix(nd)[, prep$selected_features, drop = FALSE]
+  expect_equal(unname(got), unname(expected), tolerance = 1e-10)
+
+  # Scoring the new samples on their own does not land there, which is what
+  # the stored block is for.
+  lc_alone <- CATEomics:::.cf_newdata_logcpm(
+    SummarizedExperiment::assay(te, "expr"))
+  alone <- suppressMessages(CATEomics:::.cf_gsva_scores(lc_alone, gs, "gsva"))
+  expect_gt(max(abs(alone[prep$selected_features, ] -
+                      oracle[prep$selected_features, 53:60])), 1e-3)
+})
+
+test_that("pathway aggregation replaces the genes with one column per set", {
+  skip_if_not_installed("SummarizedExperiment")
+  skip_if_not_installed("GSVA")
+  se <- .pathway_se("s", 40L, 3L)
+  gs <- list(setA = paste0("G", 1:20), setB = paste0("G", 21:40))
+  fit <- suppressMessages(cf_fit(
+    data = se, Y = "Y", T = "T", X_baseline = "age", omics = "all",
+    feature_method = "pathway", gene_sets = gs, method = "grf",
+    partition = "none", random_state = 1L))
+  # The old test here accepted an error, a warning or a fit, which is every
+  # outcome a tryCatch can produce, so it could not fail.
+  expect_setequal(fit$meta$covariate_names, c("age", names(gs)))
+  expect_equal(fit$meta$estimator$preprocess$gene_sets_source, "custom")
+})
+
+
+test_that(".apply_lognorm actually applies TMM, not just the label", {
+  skip_if_not_installed("edgeR")
+  set.seed(12)
+  p <- 200L; n <- 12L
+  m <- matrix(rpois(p * n, 50), p, n,
+              dimnames = list(paste0("g", seq_len(p)), paste0("s", seq_len(n))))
+  # Three samples dominated by a small set of features: composition differs,
+  # which is the situation TMM exists for.
+  m[1:40, 1:3] <- m[1:40, 1:3] * 30L
+
+  out <- CATEomics:::.apply_lognorm(m, input_type = "SE", preprocess = TRUE)
+  dge <- edgeR::DGEList(counts = m)
+  factors <- edgeR::normLibSizes(dge, method = "TMM")$samples$norm.factors
+  plain   <- edgeR::cpm(edgeR::normLibSizes(dge, method = "none"), log = TRUE)
+
+  # Reporting "TMM" while normalising with method = "none" would leave the
+  # label right and the numbers wrong, which the existing shape checks allow.
+  expect_equal(out$norm_method, "TMM")
+  expect_gt(max(abs(factors - 1)), 0.2)
+  expect_gt(max(abs(out$assay - plain)), 0.5)
+  expect_equal(out$assay, edgeR::cpm(edgeR::normLibSizes(dge, method = "TMM"),
+                                     log = TRUE),
+               tolerance = 1e-10)
 })

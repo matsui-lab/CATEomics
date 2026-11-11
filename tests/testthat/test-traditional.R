@@ -9,7 +9,7 @@ test_that("cf_fit_grf basic execution", {
   Y <- 1.5 * T + 0.8 * X1 + 0.4 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "grf")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf")
 
   expect_s3_class(fit, "cf_model")
   expect_s3_class(fit, "cf_model")
@@ -38,7 +38,7 @@ test_that("cf_fit_grf y0/y1 use Y.hat - W.hat*tau form (B3)", {
   Y <- 1.5 * T + 0.8 * X1 + 0.4 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "grf",
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf",
                 random_state = 0L)
 
   tau_forest <- fit$model$model
@@ -74,9 +74,8 @@ test_that("cf_fit_grf restores .Random.seed after fitting", {
 
   set.seed(777)  # reset before the call
   pre_seed <- .Random.seed
-  cf_fit(Y ~ T | X1 + X2, data = data, method = "grf",
-         partition = "none",                   # at n=100 the K=5 default oof
-         random_state = 1L, num.trees = 200L)  # gives insufficient grf
+  cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "grf",
+          partition = "none", random_state = 1L, params = list(num.trees = 200L))  # gives insufficient grf
                                                 # honesty; use none. This test
                                                 # (.Random.seed restore) is
                                                 # independent of partition.

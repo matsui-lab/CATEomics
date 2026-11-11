@@ -1,0 +1,11 @@
+citHeader("To cite CATEomics in publications use:")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "CATEomics: Comparing, Selecting and Combining CATE Estimators for Omics Data",
+  author  = c(person("Takeru", "Furuta"),
+              person("Yusuke", "Matsui")),
+  year    = "2026",
+  note    = paste("R package version", meta$Version),
+  url     = "https://github.com/matsui-lab/CATEomics"
+)

@@ -1,18 +1,65 @@
-#' Parse cfomics formula `Y ~ T | X1 + X2 + ...`
+#' Bring the treatment column to a numeric 0/1 vector.
+#'
+#' A logical, and a factor or character whose values are exactly "0" and "1",
+#' name their own arms, so they are converted. Any other factor or character
+#' does not: `as.integer()` on a factor returns the level codes, which are
+#' 1-based, so a two-level factor would silently become 1/2 and every arm-wise
+#' fit would look for a control group that is not there. Which level is the
+#' treated one is the caller's to state, not this function's to guess, so that
+#' case is refused with the recoding spelled out.
+#'
+#' @param T The treatment column as supplied.
+#' @param treatment_name Its name, for the message.
+#' @return Numeric 0/1 vector.
+#' @keywords internal
+#' @noRd
+.cf_coerce_treatment <- function(T, treatment_name = "T") {
+  if (is.logical(T)) return(as.integer(T))
+  if (is.factor(T) || is.character(T)) {
+    chr <- as.character(T)
+    vals <- sort(unique(chr[!is.na(chr)]))
+    if (all(vals %in% c("0", "1"))) return(as.integer(chr))
+    rlang::abort(
+      c(sprintf("`%s` must be a numeric 0/1 vector; %s was supplied.",
+                treatment_name, if (is.factor(T)) "a factor" else "a character vector"),
+        x = sprintf("Values found: %s.", paste(shQuote(vals), collapse = ", ")),
+        i = sprintf("Name the treated arm, e.g. %s = as.integer(%s == %s).",
+                    treatment_name, treatment_name,
+                    shQuote(if (length(vals)) vals[[length(vals)]] else "treated"))),
+      class = "cateomics_treatment_not_binary"
+    )
+  }
+  uT <- sort(unique(T))
+  if (!all(uT %in% c(0, 1))) {
+    rlang::abort(
+      c(sprintf("`%s` must be binary (0/1) or logical.", treatment_name),
+        x = sprintf("Values found: %s.",
+                    paste(utils::head(format(uT), 5L), collapse = ", "))),
+      class = "cateomics_treatment_not_binary"
+    )
+  }
+  as.integer(T)
+}
+
+#' Parse CATEomics formula `Y ~ T | X1 + X2 + ...`
 #'
 #' Uses \pkg{Formula} to enforce the two-part RHS syntax explicitly: the
 #' treatment goes on the LHS of `|`, the covariates on the RHS. Formulas
-#' without `|` (e.g. `Y ~ T + X1`) are rejected at parse time, since
-#' `all.vars(formula)[-1]` would silently mis-parse them and produce wrong
-#' treatment/covariate assignments.
+#' without `|` (e.g. `Y ~ T + X1`) are rejected at parse time.
+#'
+#' @param allow_no_covariate When the covariates arrive as an omics block
+#'   rather than as columns of `data`, the formula names none of them and its
+#'   covariate part is empty on purpose. The callers that build an assay matrix
+#'   pass `TRUE`; everyone else keeps the default, so a formula with nothing
+#'   after `|` and no omics block is still refused.
 #'
 #' @keywords internal
 #' @noRd
-parse_cf_formula <- function(formula, data) {
+parse_cf_formula <- function(formula, data, allow_no_covariate = FALSE) {
   all_v <- all.vars(formula)
   for (v in all_v) {
     if (v %in% names(data) && any(is.na(data[[v]]))) {
-      rlang::abort(sprintf("NA values found in variable '%s'. Please remove or impute missing values.", v), class = "cfomics_na_in_variable")
+      rlang::abort(sprintf("NA values found in variable '%s'. Please remove or impute missing values.", v), class = "cateomics_na_in_variable")
     }
   }
 
@@ -23,29 +70,28 @@ parse_cf_formula <- function(formula, data) {
   if (lhs_len != 1L) {
     rlang::abort(
       paste0(
-        "cfomics requires a single outcome variable on the LHS.\n",
-        "Got ", lhs_len, " LHS parts; expected `Y ~ T | X1 + X2 + ...`."
+        "CATEomics requires a single outcome variable on the LHS.\n",
+        "Got ", lhs_len, " left-hand-side parts; expected one outcome."
       ),
-      class = "cfomics_formula_lhs"
+      class = "cateomics_formula_lhs"
     )
   }
   if (rhs_len == 1L) {
     rlang::abort(
       paste0(
-        "cfomics requires the two-part formula `Y ~ T | X1 + X2 + ...`.\n",
-        "Got a single-part RHS; separate the treatment and covariates with `|`.\n",
-        "Example: `Y ~ T | X1 + X2` (not `Y ~ T + X1 + X2`)."
+        "Internal: the canonical formula has a single-part right-hand side; ",
+        "expected `T | X`."
       ),
-      class = "cfomics_formula_rhs_missing"
+      class = "cateomics_formula_rhs_missing"
     )
   }
   if (rhs_len > 2L) {
     rlang::abort(
       paste0(
-        "cfomics requires exactly two RHS parts `T | X`; got ", rhs_len, ".\n",
-        "Example: `Y ~ T | X1 + X2`."
+        "Internal: the canonical formula has ", rhs_len,
+        " right-hand-side parts; expected exactly two, `T | X`."
       ),
-      class = "cfomics_formula_rhs_extra"
+      class = "cateomics_formula_rhs_extra"
     )
   }
 
@@ -57,7 +103,7 @@ parse_cf_formula <- function(formula, data) {
     rlang::abort(
       sprintf("Column(s) not found in data: %s.",
               paste(missing_cols, collapse = ", ")),
-      class = "cfomics_unknown_column"
+      class = "cateomics_unknown_column"
     )
   }
 
@@ -66,13 +112,13 @@ parse_cf_formula <- function(formula, data) {
   outcome_name <- all.vars(stats::formula(f, lhs = 1L, rhs = 0L))
   if (length(outcome_name) != 1L) {
     rlang::abort(
-      "cfomics requires exactly one outcome variable on the LHS.",
-      class = "cfomics_formula_outcome"
+      "CATEomics requires exactly one outcome variable on the LHS.",
+      class = "cateomics_formula_outcome"
     )
   }
   Y <- mf[[outcome_name]]
   if (!is.numeric(Y)) {
-    rlang::abort("Outcome Y must be numeric.", class = "cfomics_outcome_not_numeric")
+    rlang::abort("Outcome Y must be numeric.", class = "cateomics_outcome_not_numeric")
   }
 
   # Y-type advisory: a 0/1 binary outcome is a supported first-class mode (risk
@@ -89,7 +135,7 @@ parse_cf_formula <- function(formula, data) {
         "Y appears count-like (", n_unique_Y, " unique non-negative integers) ",
         "and will be treated as continuous; consider whether that is intended."
       ),
-      class = "cfomics_y_type_warning"
+      class = "cateomics_y_type_warning"
     )
   }
 
@@ -98,29 +144,25 @@ parse_cf_formula <- function(formula, data) {
   if (length(treatment_vars) != 1L) {
     rlang::abort(
       paste0(
-        "cfomics requires exactly one treatment variable on the LHS of `|`.\n",
+        "CATEomics requires exactly one treatment variable on the LHS of `|`.\n",
         "Got ", length(treatment_vars), ": ",
         paste(treatment_vars, collapse = ", "), ".\n",
         "Example: `Y ~ T | X1 + X2`."
       ),
-      class = "cfomics_formula_treatment"
+      class = "cateomics_formula_treatment"
     )
   }
   treatment_name <- treatment_vars
   T <- mf[[treatment_name]]
 
-  if (is.logical(T)) T <- as.integer(T)
-  uT <- sort(unique(T))
-  if (!all(uT %in% c(0, 1))) {
-    rlang::abort("Treatment must be binary (0/1) or logical.", class = "cfomics_treatment_not_binary")
-  }
+  T <- .cf_coerce_treatment(T, treatment_name)
 
   # RHS part 2: covariates.
   covariate_names <- all.vars(stats::formula(f, lhs = 0L, rhs = 2L))
-  if (length(covariate_names) == 0L) {
+  if (length(covariate_names) == 0L && !allow_no_covariate) {
     rlang::abort(
-      "cfomics requires at least one covariate on the RHS of `|`.",
-      class = "cfomics_no_covariate"
+      "CATEomics requires at least one covariate on the RHS of `|`.",
+      class = "cateomics_no_covariate"
     )
   }
   if (treatment_name %in% covariate_names) {
@@ -129,7 +171,7 @@ parse_cf_formula <- function(formula, data) {
         "Treatment variable '%s' cannot also appear among covariates.",
         treatment_name
       ),
-      class = "cfomics_treatment_in_covariates"
+      class = "cateomics_treatment_in_covariates"
     )
   }
   if (outcome_name %in% covariate_names) {
@@ -138,26 +180,26 @@ parse_cf_formula <- function(formula, data) {
         "Outcome variable '%s' cannot also appear among covariates.",
         outcome_name
       ),
-      class = "cfomics_outcome_in_covariates"
+      class = "cateomics_outcome_in_covariates"
     )
   }
   X <- mf[, covariate_names, drop = FALSE]
 
   # factor / character / logical covariates are one-hot expanded downstream by
   # `.expand_factor_columns` in cf_fit Step 5, so no hard error here; a
-  # non-numeric X passes through as a data.frame and cf_fit expands it. The
-  # non-cf_fit paths (`as_cf_data.SE/MAE`) use X directly, so this returns a
-  # matrix when all-numeric and a data.frame only when factor/character/logical
-  # columns are present (the caller dispatches on type).
+  # non-numeric X passes through as a data.frame and cf_fit expands it.
+  # This returns a matrix when every column is numeric and a data.frame only
+  # when factor / character / logical columns are present; the caller
+  # dispatches on the type.
 
   # Allow dots in variable names (R syntactic identifiers). Identifier
   # judgment matches base R: `gene.A`, `gene_A`, `geneA1` -> OK;
   # `gene-A`, `5gene`, `gene[1]`, names with whitespace -> NG.
-  # This is only a warning, since the named-args facade backtick-wraps all
-  # column names so Formula::Formula() parses fine even with hyphenated
-  # identifiers (real gene symbols like `HLA-B`). The warning is still useful
-  # to flag legacy-formula users who might be surprised by downstream backtick
-  # handling.
+  # This is only a warning, since the names are backtick-wrapped when the
+  # canonical formula is built, so Formula::Formula() parses fine even with
+  # hyphenated identifiers (real gene symbols like `HLA-B`). It is still worth
+  # saying, because such a name comes back quoted in the design matrix and in
+  # every table built from it.
   all_names <- c(outcome_name, treatment_name, covariate_names)
   if (!identical(make.names(all_names, unique = FALSE), all_names)) {
     bad <- all_names[make.names(all_names) != all_names]
@@ -168,24 +210,22 @@ parse_cf_formula <- function(formula, data) {
         i = "Formula parsing proceeds via backtick-quoted names (Formula::Formula).",
         i = "If you want pure syntactic names, run: colnames(data) <- make.names(colnames(data), unique = TRUE)."
       ),
-      class = "cfomics_nonsyntactic_names",
-      .frequency = "regularly",
-      .frequency_id = "cfomics_nonsyntactic_names"
+      class = "cateomics_nonsyntactic_names"
     )
   }
 
   n <- length(Y)
   if (n == 0) {
-    rlang::abort("Data has no observations.", class = "cfomics_no_observations")
+    rlang::abort("Data has no observations.", class = "cateomics_no_observations")
   }
   if (n < 10) {
-    rlang::abort("Insufficient sample size. At least 10 observations required.", class = "cfomics_insufficient_n")
+    rlang::abort("Insufficient sample size. At least 10 observations required.", class = "cateomics_insufficient_n")
   }
 
   n_treated <- sum(T == 1)
   n_control <- sum(T == 0)
   if (n_treated == 0 || n_control == 0) {
-    rlang::abort("Both treatment and control groups must have observations.", class = "cfomics_group_empty")
+    rlang::abort("Both treatment and control groups must have observations.", class = "cateomics_group_empty")
   }
 
   # Return a matrix when X is all-numeric; return a data.frame when it
@@ -205,143 +245,123 @@ parse_cf_formula <- function(formula, data) {
 }
 
 
-#' Build cfomics formula from named arguments
+#' Build CATEomics formula from named arguments
 #'
 #' Converts the user-facing named-arguments API
-#' (`Y = "outcome", T = "treatment", X_baseline = c(...), X_rnaseq = c(...),
-#'   ..., X_assays = list(atac = "ATAC"))`)
-#' into the legacy `Y ~ T | X1 + X2 + ...` two-part formula that
+#' (`Y = "outcome", T = "treatment", X_baseline = c(...), omics = ...`)
+#' into the canonical `Y ~ T | X1 + X2 + ...` two-part formula that
 #' `parse_cf_formula()` already consumes. This lets the entire downstream
 #' pipeline (cf_fit Step 1-7, base learners, dispatch, prediction) stay
 #' unchanged: the named-args facade lives at the entry point only.
 #'
-#' For df input the column names are returned as-is. For SummarizedExperiment /
-#' MultiAssayExperiment the column resolution against assays / experiments /
-#' colData is the responsibility of `.resolve_X_columns()`; here we just
-#' concatenate the supplied character vectors and trust that they refer to
-#' resolvable column names downstream.
+#' Only explicitly named omics features join the formula RHS: they are
+#' materialised into colData upstream so `parse_cf_formula()` can resolve them,
+#' and are stripped again once the assay matrix takes over. A whole layer
+#' (`"all"`) never enters the formula, and for a data.frame the omics block is
+#' the assay matrix rather than formula covariates.
 #'
 #' @param Y,T Character scalars naming the outcome / treatment variable.
-#' @param X_baseline,X_rnaseq,X_mirna,X_methyl,X_protein,X_mutation,X_cnv
-#'   Character vectors of column names per omics dedicated slot. Any may be
-#'   `NULL`. At least one X argument (any of the above or `X_assays`) must be
-#'   non-empty.
-#' @param X_assays Optional named list for generic / future omics
-#'   (`list(atac = c("ATAC1", ...))`). The values are flattened into the
-#'   formula RHS just like the dedicated slots.
+#' @param X_baseline Character vector of non-omics covariate names.
+#' @param omics_spec Resolved `omics` spec from `.cf_resolve_omics()`.
 #'
 #' @return A list with two elements:
 #'   - `formula`: the canonical two-part formula `as.formula("Y ~ T | X1 + ...")`
-#'   - `structured`: the structured named-args bag (Y, T, X_*) for downstream
-#'     meta-recording; read to drive omics-aware behaviour.
+#'   - `structured`: the structured named-args bag (Y, T, X_baseline, omics)
+#'     for downstream meta-recording; read to drive omics-aware behaviour.
 #'
 #' @keywords internal
 #' @noRd
 .build_formula_from_named <- function(Y = NULL, T = NULL,
                                        X_baseline = NULL,
-                                       X_rnaseq = NULL, X_mirna = NULL,
-                                       X_methyl = NULL, X_protein = NULL,
-                                       X_mutation = NULL, X_cnv = NULL,
-                                       X_assays = NULL) {
+                                       omics_spec = NULL) {
   # ---- Y / T validation ----
   if (is.null(Y) || !is.character(Y) || length(Y) != 1L || is.na(Y) ||
       !nzchar(Y)) {
     rlang::abort(
       "Argument `Y` must be a single non-empty character string naming the outcome variable.",
-      class = "cfomics_invalid_Y"
+      class = "cateomics_invalid_Y"
     )
   }
   if (is.null(T) || !is.character(T) || length(T) != 1L || is.na(T) ||
       !nzchar(T)) {
     rlang::abort(
       "Argument `T` must be a single non-empty character string naming the treatment variable.",
-      class = "cfomics_invalid_T"
+      class = "cateomics_invalid_T"
+    )
+  }
+  if (!is.null(X_baseline) && !is.character(X_baseline)) {
+    rlang::abort(
+      sprintf("Argument `X_baseline` must be a character vector of column names (got %s).",
+              class(X_baseline)[1L]),
+      class = "cateomics_invalid_X_slot"
     )
   }
 
-  # ---- X_* validation ----
-  X_char_slots <- list(
-    X_baseline = X_baseline,
-    X_rnaseq   = X_rnaseq,
-    X_mirna    = X_mirna,
-    X_methyl   = X_methyl,
-    X_protein  = X_protein,
-    X_mutation = X_mutation,
-    X_cnv      = X_cnv
-  )
-  for (slot_name in names(X_char_slots)) {
-    slot_val <- X_char_slots[[slot_name]]
-    if (!is.null(slot_val) && !is.character(slot_val)) {
-      rlang::abort(
-        sprintf("Argument `%s` must be a character vector of column names (got %s).",
-                slot_name, class(slot_val)[1L]),
-        class = "cfomics_invalid_X_slot"
-      )
-    }
+  # Only explicitly listed omics features enter the formula; a whole layer
+  # ("all") travels down the assay path instead, where feature selection
+  # applies. For a data.frame the omics block never enters the formula: those
+  # columns are the assay matrix.
+  omics_cols <- if (is.null(omics_spec) ||
+                    identical(omics_spec$input_type, "data.frame")) {
+    character(0)
+  } else {
+    unlist(omics_spec$features, use.names = FALSE)
   }
-  if (!is.null(X_assays)) {
-    if (!is.list(X_assays) || is.null(names(X_assays)) ||
-        any(!nzchar(names(X_assays)))) {
-      rlang::abort(
-        "Argument `X_assays` must be a named list, e.g., `list(atac = c('ATAC1', 'ATAC2'))`.",
-        class = "cfomics_invalid_X_assays"
-      )
-    }
-    for (a_name in names(X_assays)) {
-      if (!is.character(X_assays[[a_name]])) {
-        rlang::abort(
-          sprintf("`X_assays[['%s']]` must be a character vector of column names.",
-                  a_name),
-          class = "cfomics_invalid_X_assays"
-        )
-      }
-    }
-  }
-
-  # ---- Concatenate all X column names ----
-  all_X <- c(
-    X_baseline, X_rnaseq, X_mirna, X_methyl, X_protein, X_mutation, X_cnv,
-    if (!is.null(X_assays)) unlist(X_assays, use.names = FALSE) else NULL
-  )
+  all_X <- c(X_baseline, omics_cols)
   all_X <- all_X[!is.na(all_X) & nzchar(all_X)]
-  if (length(all_X) == 0L) {
+  # An omics block supplies the design without naming anything in the formula:
+  # a whole layer travels down the assay path, and for a data.frame the omics
+  # columns are the assay matrix. So the covariate part is empty on purpose
+  # whenever a layer is in play, and the formula is written with an empty
+  # second part (the covariates join the design matrix later, in Step 5, which
+  # already has a branch for no clinical columns at all). Only a call with no
+  # omics block left -- `omics = "none"`, or its default on a data.frame -- has
+  # genuinely nothing to fit on.
+  has_omics_block <- !is.null(omics_spec) && length(omics_spec$layers) > 0L
+  if (length(all_X) == 0L && !has_omics_block) {
     rlang::abort(
-      paste0("At least one X column must be supplied via X_baseline / X_rnaseq / ",
-             "X_mirna / X_methyl / X_protein / X_mutation / X_cnv / X_assays."),
-      class = "cfomics_no_X_supplied"
+      c("No covariates: the call leaves the omics block out, so there is nothing to fit on.",
+        i = "Name the clinical columns in `X_baseline`, or take an omics layer (`omics = \"all\"`, a layer name, or a feature vector)."),
+      class = "cateomics_no_X_supplied"
     )
   }
   if (Y %in% all_X) {
     rlang::abort(
       sprintf("Outcome variable `%s` cannot also appear among X columns.", Y),
-      class = "cfomics_Y_in_X"
+      class = "cateomics_Y_in_X"
     )
   }
   if (T %in% all_X) {
     rlang::abort(
       sprintf("Treatment variable `%s` cannot also appear among X columns.", T),
-      class = "cfomics_T_in_X"
+      class = "cateomics_T_in_X"
     )
   }
   dup_X <- duplicated(all_X)
   if (any(dup_X)) {
     rlang::abort(
-      sprintf("Duplicate column name(s) in X slots: %s",
+      sprintf("Duplicate column name(s) across `X_baseline` / `omics`: %s",
               paste(unique(all_X[dup_X]), collapse = ", ")),
-      class = "cfomics_duplicate_X"
+      class = "cateomics_duplicate_X"
     )
   }
 
-  # ---- Build formula. Use backticks for syntactic-identifier safety
-  # (gene names with dots are already allowed by parse_cf_formula; backticks
-  # make non-syntactic names round-trip safely too). ----
+  # ---- Build formula. Backticks keep non-syntactic feature names safe. ----
+  # With nothing to name, the second part is written as `1` so the formula
+  # keeps the two-part shape the parser requires while naming no covariate.
   bt <- function(x) sprintf("`%s`", x)
   formula_str <- sprintf(
     "%s ~ %s | %s",
     bt(Y), bt(T),
-    paste(vapply(all_X, bt, character(1)), collapse = " + ")
+    if (length(all_X) == 0L) "1"
+    else paste(vapply(all_X, bt, character(1)), collapse = " + ")
   )
-  formula_obj <- stats::as.formula(formula_str, env = parent.frame())
+  # `baseenv()`, not the calling frame: this formula is only ever evaluated
+  # against an explicit `data` argument (`parse_cf_formula()` checks every
+  # variable against `names(data)` before `model.frame()` sees it), so it needs
+  # no enclosing scope. A calling frame would be carried along by every object
+  # the user receives, input container and all.
+  formula_obj <- stats::as.formula(formula_str, env = baseenv())
 
   list(
     formula = formula_obj,
@@ -349,104 +369,15 @@ parse_cf_formula <- function(formula, data) {
       Y          = Y,
       T          = T,
       X_baseline = X_baseline,
-      X_rnaseq   = X_rnaseq,
-      X_mirna    = X_mirna,
-      X_methyl   = X_methyl,
-      X_protein  = X_protein,
-      X_mutation = X_mutation,
-      X_cnv      = X_cnv,
-      X_assays   = X_assays,
-      X_all      = all_X
+      # Which layers, and the features named in each. Whether a layer is
+      # treated as RNA-seq is recorded with that layer, in the preprocessing
+      # record, so there is one place to ask.
+      omics      = if (is.null(omics_spec)) NULL else omics_spec$layers
     )
   )
 }
 
 
-#' Resolve X columns from named arguments based on data class.
-#'
-#' The facade `.build_formula_from_named()` just concatenates all X_*
-#' character vectors into the formula RHS — it does not know whether the
-#' caller passed a data.frame / SummarizedExperiment / MultiAssayExperiment.
-#' This adds the data-class-aware validation layer so users get a clear error
-#' when they combine an X slot with the wrong input type.
-#'
-#' Rules:
-#' - data.frame: any of `X_baseline` / `X_rnaseq` / ... / `X_cnv` may be
-#'   used (they are just column-name vectors). `X_assays` is **rejected**
-#'   (data.frame has no assay concept).
-#' - SummarizedExperiment: at most ONE of the six dedicated `X_<omics>` slots
-#'   may be used (SE holds a single primary assay). `X_assays` is rejected.
-#' - MultiAssayExperiment: all six dedicated `X_<omics>` slots may be used
-#'   in parallel, plus `X_assays` for additional experiments. Most flexible.
-#'
-#' Column-existence verification (e.g., "`X_baseline = 'foo'` but `foo` is
-#' not a column of `data`") is delegated to the downstream
-#' `parse_cf_formula()` / `as_cf_data()` path which already runs a full
-#' `model.frame` validation; this only enforces the slot-shape rules above.
-#'
-#' @param data User-supplied data object.
-#' @param X_rnaseq,X_mirna,X_methyl,X_protein,X_mutation,X_cnv
-#'   Character vectors per omics dedicated slot. Any may be NULL.
-#' @param X_assays Optional named list of additional assay slots.
-#'
-#' @return Invisibly TRUE on success. Errors with a `cfomics_*` class on
-#'   validation failure.
-#'
-#' @keywords internal
-#' @noRd
-.resolve_X_columns <- function(data,
-                                X_rnaseq   = NULL, X_mirna    = NULL,
-                                X_methyl   = NULL, X_protein  = NULL,
-                                X_mutation = NULL, X_cnv      = NULL,
-                                X_assays   = NULL) {
-  dedicated <- list(
-    X_rnaseq   = X_rnaseq,   X_mirna    = X_mirna,
-    X_methyl   = X_methyl,   X_protein  = X_protein,
-    X_mutation = X_mutation, X_cnv      = X_cnv
-  )
-  n_dedicated <- sum(vapply(dedicated, function(x) !is.null(x), logical(1)))
-  dedicated_used <- names(dedicated)[vapply(dedicated, function(x) !is.null(x), logical(1))]
-
-  is_df  <- is.data.frame(data)
-  is_se  <- !is_df && inherits(data, "SummarizedExperiment")
-  is_mae <- !is_df && !is_se && inherits(data, "MultiAssayExperiment")
-
-  if (!is_df && !is_se && !is_mae) {
-    rlang::abort(
-      sprintf("Unsupported data class: %s. Expected data.frame, SummarizedExperiment, or MultiAssayExperiment.",
-              paste(class(data), collapse = ", ")),
-      class = "cfomics_invalid_data_type"
-    )
-  }
-
-  # data.frame: assay concept does not exist
-  if (is_df && !is.null(X_assays)) {
-    rlang::abort(
-      c("Argument `X_assays` is not supported for data.frame input.",
-        i = "data.frame has no assay concept; pass column names via X_rnaseq / X_mirna / etc. directly, or switch to SE / MAE input."),
-      class = "cfomics_X_assays_unsupported_df"
-    )
-  }
-
-  # SummarizedExperiment: single primary assay
-  if (is_se && n_dedicated > 1L) {
-    rlang::abort(
-      c(sprintf("SE input supports at most one X_<omics> dedicated argument (got %d: %s).",
-                n_dedicated, paste(dedicated_used, collapse = ", ")),
-        i = "For multi-assay support, switch to MultiAssayExperiment (MAE) input."),
-      class = "cfomics_multiple_omics_unsupported_se"
-    )
-  }
-  if (is_se && !is.null(X_assays)) {
-    rlang::abort(
-      c("Argument `X_assays` is not supported for SummarizedExperiment input.",
-        i = "SE holds a single primary assay; for additional assays switch to MAE input."),
-      class = "cfomics_X_assays_unsupported_se"
-    )
-  }
-
-  invisible(TRUE)
-}
 
 
 #' Resolve a `propensity_X` argument against the covariate matrix.
@@ -490,7 +421,7 @@ parse_cf_formula <- function(formula, data) {
   if (!is.character(propensity_X) || length(propensity_X) == 0L) {
     rlang::abort(
       "`propensity_X` must be a non-empty character vector of column names.",
-      class = "cfomics_invalid_propensity_X"
+      class = "cateomics_invalid_propensity_X"
     )
   }
   if (is.null(x_names) || any(!nzchar(x_names))) {
@@ -499,15 +430,21 @@ parse_cf_formula <- function(formula, data) {
              "This typically means the upstream preprocessing dropped names; ",
              "consider passing `propensity_X` only with named matrices or ",
              "via the named-args entry to cf_fit."),
-      class = "cfomics_propensity_X_no_names"
+      class = "cateomics_propensity_X_no_names"
     )
   }
   missing <- setdiff(propensity_X, x_names)
   if (length(missing) > 0L) {
+    shown <- utils::head(x_names, 10L)
     rlang::abort(
-      sprintf("`propensity_X` columns not present in X: %s",
-              paste(missing, collapse = ", ")),
-      class = "cfomics_propensity_X_missing"
+      c(sprintf("`propensity_X` columns not present in X: %s.",
+                paste(missing, collapse = ", ")),
+        i = sprintf("Available: %s%s.", paste(shown, collapse = ", "),
+                    if (length(x_names) > length(shown)) ", ..." else ""),
+        i = paste("Preprocessing expands factors, selects features and can",
+                  "replace the omics block with components, so the names are",
+                  "the ones it produced.")),
+      class = "cateomics_propensity_X_missing"
     )
   }
   idx <- match(propensity_X, x_names)
@@ -521,6 +458,29 @@ parse_cf_formula <- function(formula, data) {
 }
 
 
+#' Refuse a propensity covariate subset that is not in the design matrix.
+#'
+#' `propensity_X` restricts two propensities -- the estimator's and the
+#' evaluation nuisance's -- so a name that preprocessing did not produce (a
+#' factor level before expansion, a gene dropped by feature selection, `PC1`
+#' when no PCA ran) is refused at the entry, where the caller can see which
+#' names exist, rather than deep inside a nuisance fit.
+#'
+#' @param propensity_X Character vector or NULL.
+#' @param x_names Column names of the preprocessed design matrix.
+#' @keywords internal
+#' @noRd
+.cf_check_propensity_X <- function(propensity_X, x_names) {
+  if (is.null(propensity_X)) return(invisible(NULL))
+  # The resolver already refuses a non-character value and a name the matrix
+  # does not have, so it is asked here on an empty matrix carrying those names
+  # rather than a second copy of the same two rules.
+  invisible(.resolve_propensity_X(
+    matrix(numeric(0), nrow = 0L, ncol = length(x_names),
+           dimnames = list(NULL, x_names)),
+    propensity_X, x_names))
+}
+
 #' Warn when `propensity_X` is supplied to a method that cannot use it.
 #'
 #' The PS-unused / PS-architecturally-fixed group spans 6 methods:
@@ -528,9 +488,10 @@ parse_cf_formula <- function(formula, data) {
 #' - PS architecturally fused into the network: `dragonnet`, `cevae`, `ganite`,
 #'   `tarnet`
 #'
-#' For these methods, propensity_X cannot be honoured; we warn (with the
-#' actionable hint that the argument is silently ignored) and return TRUE
-#' so callers can branch (skip subsetting or fall through to the full-X path).
+#' For these methods the estimator cannot honour propensity_X, so we warn --
+#' naming that it still restricts the evaluation nuisance, which the proxy
+#' losses and the evaluation metrics read -- and return TRUE so callers can
+#' branch (skip subsetting or fall through to the full-X path).
 #'
 #' @param method String method name.
 #' @param propensity_X Character vector or NULL.
@@ -549,96 +510,151 @@ parse_cf_formula <- function(formula, data) {
   )
   if (method %in% ignored_methods) {
     rlang::warn(
-      c(sprintf("`propensity_X` ignored for method = '%s'.", method),
+      c(sprintf("`propensity_X` does not reach the estimator for method = '%s'.",
+                method),
         i = "This method does not use a separable propensity score (PS not in the estimator, or NN architecture-fixed).",
-        i = "The fit proceeds with the full X covariate set."),
-      class = "cfomics_propensity_X_ignored",
-      .frequency = "regularly", .frequency_id = paste0("propensity_X_", method)
+        i = "This method's fit proceeds with the full X covariate set.",
+        i = "It still restricts the evaluation nuisance, which the proxy losses and the evaluation metrics read."),
+      class = "cateomics_propensity_X_ignored"
     )
     return(TRUE)
   }
   FALSE
 }
 
+#' The class of one condition, for naming it in a report
+#'
+#' @param cnd A condition.
+#' @return The condition's own class, or `""` when it has none.
+#' @keywords internal
+#' @noRd
+.cf_condition_class <- function(cnd) {
+  cl <- setdiff(class(cnd),
+                c("warning", "message", "condition", "simpleWarning",
+                  "simpleMessage", "rlang_warning", "rlang_message",
+                  "rlang_condition"))
+  if (length(cl)) cl[[1L]] else ""
+}
 
-#' Resolve the named-args / formula API dual entry.
+#' A key that collapses a repeat but keeps a different wording
 #'
-#' Single entry point used by `cf_fit` and `cf_compare` to map
-#' whichever API the caller supplied (legacy `formula` or named `Y` + `T` +
-#' `X_*`) onto the legacy formula that the rest of the pipeline already
-#' understands. Returns the canonical formula plus the structured-args bag for
-#' downstream meta-recording (the structured bag is `NULL` when the caller went
-#' through the legacy formula path).
+#' A candidate is fitted once per fold, so the same warning arrives several
+#' times and only one copy is worth reporting. The class alone is the wrong
+#' key: one class covers several messages -- the Super Learner reports a
+#' collapsed slot by naming the slot in the text -- and keying on it would
+#' keep whichever arrived last. The pair keeps every distinct wording and
+#' collapses only exact repeats.
 #'
-#' Validation rules:
-#' - Both supplied → `cfomics_input_mode_conflict` (cannot guess intent).
-#' - Neither supplied → `cfomics_invalid_input` (need at least one).
-#' - `formula` supplied → emit a deprecation warning (once per session) and
-#'   pass formula through.
-#' - Named args supplied → build the formula via `.build_formula_from_named()`.
+#' @param cnd A condition.
+#' @return A single string.
+#' @keywords internal
+#' @noRd
+.cf_condition_key <- function(cnd) {
+  paste(.cf_condition_class(cnd), conditionMessage(cnd), sep = "\r")
+}
+
+#' Evaluate a call, letting each distinct condition through only once
+#'
+#' The fold loop raises a fold's warning once per fold. The caller asked for
+#' one fit, so they hear about it once; a wording that differs between folds
+#' is a different warning and still comes through.
+#'
+#' @param expr The call to evaluate.
+#' @return The value of `expr`.
+#' @keywords internal
+#' @noRd
+.cf_dedup_conditions <- function(expr) {
+  seen <- character(0)
+  withCallingHandlers(
+    expr,
+    warning = function(cnd) {
+      k <- .cf_condition_key(cnd)
+      if (k %in% seen) invokeRestart("muffleWarning")
+      seen <<- c(seen, k)
+    },
+    message = function(cnd) {
+      k <- .cf_condition_key(cnd)
+      if (k %in% seen) invokeRestart("muffleMessage")
+      seen <<- c(seen, k)
+    }
+  )
+}
+
+#' The covariates a propensity is fitted on when none were named
+#'
+#' A propensity model built on every column would take the omics block with
+#' it. The features are measured before treatment, so they are not colliders,
+#' but a propensity fitted on thousands of them is unstable where it matters,
+#' and treatment is rarely assigned on them, so the adjustment buys little.
+#' The default therefore fits the propensity on the clinical covariates and
+#' leaves the omics block to the outcome models.
+#'
+#' With no clinical covariate there is nothing to fall back to but the full
+#' set; the caller is told, since
+#' the alternative is to refuse a dataset that has no clinical variable at all.
+#'
+#' @param propensity_X What the caller named, or NULL.
+#' @param clinical_cov_names The clinical columns of the design matrix, after
+#'   factor expansion.
+#' @param propensity_score,eval_propensity_score Known scores, if any.
+#' @return A character vector of column names, or NULL for every column.
+#' @keywords internal
+#' @noRd
+.cf_default_propensity_X <- function(propensity_X, clinical_cov_names,
+                                     propensity_score = NULL,
+                                     eval_propensity_score = NULL) {
+  if (!is.null(propensity_X)) return(propensity_X)
+  # Both scores known means no propensity is fitted anywhere, so there is
+  # nothing to restrict and nothing to report.
+  if (!is.null(propensity_score) && !is.null(eval_propensity_score)) return(NULL)
+  clin <- as.character(clinical_cov_names %||% character(0))
+  if (length(clin)) return(clin)
+  rlang::warn(
+    c("The propensity is being fitted on every covariate, omics included.",
+      i = paste("This fit has no clinical covariate to restrict it to:",
+                "every column of the design matrix came from an omics layer."),
+      i = "Narrow it with `propensity_X`, or give the known value in `propensity_score` (and `eval_propensity_score`).",
+      i = "A randomised trial has a known value: `propensity_score = 0.5`."),
+    class = "cateomics_propensity_X_fallback"
+  )
+  NULL
+}
+
+
+#' Resolve the named arguments into the canonical form.
+#'
+#' Single entry point used by `cf_fit` and `cf_compare`. It maps the names the
+#' caller gave (`Y` + `T` + `X_baseline` + `omics`) onto the two-part formula
+#' that the rest of the pipeline parses, and returns that formula together with
+#' the structured bag the result `meta` records.
+#'
+#' The formula is an internal normal form, not an entry point: it is written
+#' with backticks and bound to `baseenv()`, and the omics block never appears
+#' in it (a whole layer travels down the assay path instead).
 #'
 #' @keywords internal
 #' @noRd
-.resolve_cf_api <- function(formula = NULL,
-                             Y = NULL, T = NULL,
-                             X_baseline = NULL,
-                             X_rnaseq = NULL, X_mirna = NULL,
-                             X_methyl = NULL, X_protein = NULL,
-                             X_mutation = NULL, X_cnv = NULL,
-                             X_assays = NULL,
-                             data = NULL) {
-  has_formula <- !is.null(formula)
-  has_named   <- !is.null(Y) || !is.null(T) ||
-                 !is.null(X_baseline) || !is.null(X_rnaseq) ||
-                 !is.null(X_mirna) || !is.null(X_methyl) ||
-                 !is.null(X_protein) || !is.null(X_mutation) ||
-                 !is.null(X_cnv) || !is.null(X_assays)
-
-  if (has_formula && has_named) {
+.resolve_cf_api <- function(Y = NULL, T = NULL,
+                            X_baseline = NULL,
+                            omics = NULL,
+                            omics_type = NULL,
+                            data = NULL) {
+  # `omics` alone cannot stand in for the outcome and the treatment: a call has
+  # to name those two whatever else it supplies.
+  if (is.null(Y) && is.null(T)) {
     rlang::abort(
-      c("Specify either `formula` (legacy API) or named arguments (`Y`, `T`, `X_*`), not both.",
-        i = "Drop one path. The named-args API is preferred."),
-      class = "cfomics_input_mode_conflict"
+      # `omics` is deliberately left out of this list: it accompanies the names
+      # and does not replace them, so naming it here would ask again for an
+      # argument the caller may already have supplied.
+      c("Must supply the names of the outcome and the treatment: `Y` and `T`.",
+        i = "Example: cf_fit(data = df, Y = 'outcome', T = 'treatment', X_baseline = c('X1','X2'), method = 'grf')"),
+      class = "cateomics_invalid_input"
     )
   }
-  if (!has_formula && !has_named) {
-    rlang::abort(
-      c("Must supply either `formula` (legacy API) or named arguments (`Y`, `T`, `X_*`).",
-        i = "Example (named, recommended): cf_fit(Y = 'outcome', T = 'treatment', X_baseline = c('X1','X2'), data = df, method = 'grf')",
-        i = "Example (legacy): cf_fit(Y ~ T | X1 + X2, data = df, method = 'grf')"),
-      class = "cfomics_invalid_input"
-    )
-  }
-
-  if (has_formula) {
-    rlang::warn(
-      c(
-        "Direct formula API is deprecated.",
-        i = "Use named arguments instead: cf_fit(Y = 'outcome', T = 'treatment', X_baseline = c(...), data = ..., method = ...)",
-        "*" = "It will be removed in a future release."
-      ),
-      class = "cfomics_formula_deprecated",
-      .frequency = "once", .frequency_id = "cfomics_formula_deprecation"
-    )
-    return(list(formula = formula, structured = NULL))
-  }
-
-  # Data-class-aware validation of X_* slots (df / SE / MAE rules).
-  if (!is.null(data)) {
-    .resolve_X_columns(
-      data       = data,
-      X_rnaseq   = X_rnaseq,   X_mirna    = X_mirna,
-      X_methyl   = X_methyl,   X_protein  = X_protein,
-      X_mutation = X_mutation, X_cnv      = X_cnv,
-      X_assays   = X_assays
-    )
-  }
-  built <- .build_formula_from_named(
-    Y = Y, T = T,
-    X_baseline = X_baseline,
-    X_rnaseq = X_rnaseq, X_mirna = X_mirna, X_methyl = X_methyl,
-    X_protein = X_protein, X_mutation = X_mutation, X_cnv = X_cnv,
-    X_assays = X_assays
-  )
+  spec <- .cf_resolve_omics(omics, omics_type, data = data,
+                            Y = Y, T = T, X_baseline = X_baseline)
+  built <- .build_formula_from_named(Y = Y, T = T, X_baseline = X_baseline,
+                                     omics_spec = spec)
+  built$omics_spec <- spec
   built
 }

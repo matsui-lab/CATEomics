@@ -15,8 +15,9 @@
 
 #' Scale Y for catenets methods (X coerced and passed through)
 #'
-#' X is standardised centrally in `.cf_preprocess_input` (binary/one-hot
-#' skipped), so it is passed through unchanged here and `x_zscore` is `NULL` —
+#' X is standardised centrally in `.cf_preprocess_input` (every column,
+#' including binary indicators), so it is passed through unchanged here and
+#' `x_zscore` is `NULL` --
 #' cf_predict.R `.apply_newdata_preprocessing` re-applies the central train
 #' stats to newdata, and the OOF held-out rows are already standardised, so
 #' returning `NULL` avoids double-standardising. Only Y is standardised NN-side

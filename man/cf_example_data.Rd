@@ -2,33 +2,47 @@
 % Please edit documentation in R/cf_example_data.R
 \name{cf_example_data}
 \alias{cf_example_data}
-\title{Simulate an example omics dataset for cfomics}
+\title{Simulate an example omics dataset for CATEomics}
 \usage{
 cf_example_data(
-  n = 200L,
-  p = 500L,
-  n_prog = 20L,
-  n_pred = 10L,
-  snr = 1.5,
+  n = 150L,
+  p = 600L,
+  n_prog = 5L,
+  n_pred = 5L,
+  effect_size = 1.5,
+  ate = 0,
+  noise_sd = 1,
   seed = 1L
 )
 }
 \arguments{
-\item{n}{Integer, number of samples (columns). Default 200.}
+\item{n}{Integer, number of samples (columns). Default 150.}
 
-\item{p}{Integer, number of genes (rows). Default 500. Must exceed
-\code{n_prog + n_pred}.}
+\item{p}{Integer, number of genes (rows). Default 600. Must exceed
+\code{n_prog + n_pred}, and at most 4000. The pools hold more symbols than
+that, but how many a call can reach depends on \code{n_prog} and
+\code{n_pred}, so one stated maximum below the smallest of them is easier
+to rely on.}
 
 \item{n_prog}{Integer, number of prognostic genes (drive \eqn{\mu_0}).
-Default 20.}
+Default 5. At most 194: the members of the prognostic pathway that are not
+also in the predictive one.}
 
 \item{n_pred}{Integer, number of predictive genes (drive \eqn{\tau}).
-Default 10.}
+Default 5. At most 161, every member of the predictive pathway.}
 
-\item{snr}{Numeric, target treatment-effect signal-to-noise ratio
-\eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)}. Default 1.5.}
+\item{effect_size}{Numeric, the coefficient one signal gene carries on the
+z-scored expression scale (default 1.5); it scales both \eqn{\mu_0} and
+\eqn{\tau}.}
 
-\item{seed}{Integer, random seed. The caller's RNG state is restored on exit.}
+\item{ate}{Numeric, the constant term of \eqn{\tau}, i.e. the average
+treatment effect (default 0, so about half the samples are harmed).}
+
+\item{noise_sd}{Numeric, the standard deviation of the outcome noise
+\eqn{\varepsilon} (default 1).}
+
+\item{seed}{Integer, random seed (default \code{1}). The caller's RNG state
+is restored on exit.}
 }
 \value{
 A \code{\link[SummarizedExperiment]{SummarizedExperiment}} with one
@@ -40,73 +54,90 @@ A \code{\link[SummarizedExperiment]{SummarizedExperiment}} with one
       true individual treatment effect).}
     \item{\code{rowData}}{\code{is_prognostic} and \code{is_predictive}
       logical flags marking the signal genes.}
-    \item{\code{metadata}}{\code{cf_pathway} (the embedded pathway name),
-      \code{cf_predictive_genes}, \code{cf_prognostic_genes},
-      \code{cf_true_ate}, \code{cf_snr} (realised), and the call parameters.}
+    \item{\code{metadata}}{\code{cf_pathway} (the pathway the predictive
+      genes come from), \code{cf_predictive_genes},
+      \code{cf_prognostic_genes}, \code{cf_true_ate} (the realised mean of
+      \eqn{\tau}), \code{cf_snr} (the realised
+      \eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)}), and
+      \code{cf_params} (the call).}
   }
 }
 \description{
 Generates a small semi-synthetic \code{SummarizedExperiment} of bulk RNA-seq
 counts with a known heterogeneous treatment effect, for use in examples,
-vignettes and quick experimentation. The design mimics the \eqn{n \ll p}
-regime that cfomics targets: many genes, few samples, a randomised treatment,
+vignettes and quick experimentation. The design is \eqn{n \ll p}:
+many genes, few samples, a randomised treatment,
 and a continuous outcome whose conditional average treatment effect (CATE)
 depends on a handful of genes and on a clinical effect-modifier.
 }
 \details{
-The data are **fully simulated** and carry no biological meaning; they exist
-only to make the workflow runnable end-to-end. The generating process is:
+The data are \strong{fully simulated} and carry no biological meaning; they exist
+only to make the workflow runnable end-to-end. Every argument is a constant
+of the generating process, so the moments below follow from the arguments
+without any hidden rescaling.
 \itemize{
-  \item **Expression.** Per-gene mean counts are drawn from a log-normal
+  \item \strong{Expression.} Per-gene mean counts are drawn from a log-normal
     distribution (to give a realistic dynamic range) and counts are sampled
-    from a negative-binomial distribution (\code{\link[stats]{rnbinom}}), the
-    standard model for bulk RNA-seq (as in edgeR / DESeq2). Prognostic and
+    from a negative-binomial distribution (\code{\link[stats]{rnbinom}}).
+    Prognostic and
     predictive genes are given higher dispersion so they carry across-sample
     variation and survive default variance-based feature selection.
-  \item **Signal scale.** The outcome model is defined on the *normalised*
+  \item \strong{Signal scale.} The outcome model is defined on the \emph{normalised}
     expression scale: per-gene log2-CPM values are z-scored internally
-    (\code{z(logCPM)}), matching the log-CPM transform cfomics applies. The
+    (\eqn{z_g}), on the same scale as the log-CPM transform CATEomics
+    applies (this generator uses no TMM step and a different offset). The
     treatment effect is therefore a smooth function of normalised expression,
     not of raw counts.
-  \item **Clinical covariates.** \code{age} (\eqn{\sim N(60, 10)}) is
-    *prognostic* (enters the baseline \eqn{\mu_0}); \code{sex}
-    (\code{"F"}/\code{"M"}) is an *effect-modifier* (shifts the treatment
-    effect \eqn{\tau}), illustrating both a numeric covariate and a factor
-    that is one-hot expanded downstream.
-  \item **Treatment.** Randomised (\eqn{\Pr(T=1)=0.5}, no confounding), so
+  \item \strong{Clinical covariates.} \code{age} (\eqn{\sim N(60, 10)}) enters
+    the baseline \eqn{\mu_0}; \code{sex} (\code{"F"}/\code{"M"}) shifts the
+    treatment effect \eqn{\tau}; \code{sex} is one-hot expanded downstream.
+  \item \strong{Treatment.} Randomised (\eqn{\Pr(T=1)=0.5}, no confounding), so
     the setting is an RCT.
-  \item **Outcome.**
-    \deqn{\mu_0(X) = v_{age}\, z(age) + \sum_{g \in \mathrm{prog}} v_g\, z(logCPM_g)}
-    \deqn{\tau(X)  = ATE + \delta\, [sex = M] + \sum_{g \in \mathrm{pred}} w_g\, z(logCPM_g)}
-    \deqn{Y = \mu_0(X) + T\, \tau(X) + \varepsilon, \quad \varepsilon \sim N(0, \sigma^2)}
-    The prognostic (\eqn{\mu_0}) and predictive (\eqn{\tau}) signals are of
-    comparable strength (\eqn{\mathrm{Var}(\mu_0) \approx \mathrm{Var}(\tau)}),
-    and \eqn{\sigma} is set so that
-    \eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)} equals \code{snr}. A
-    minority of individuals have \eqn{\tau < 0}, so treatment-rule and
-    benefit-group analyses are non-trivial.
+  \item \strong{Outcome.} With \eqn{e} = \code{effect_size} and
+    \eqn{z(age)} the standardised age,
+    \deqn{\mu_0(X) = e \left( \sum_{g \in \mathrm{prog}} z_g + z(age) \right)}
+    \deqn{\tau(X)  = \mathrm{ate} + e \left( \sum_{g \in \mathrm{pred}} z_g + 1[sex = M] - 1/2 \right)}
+    \deqn{Y = \mu_0(X) + T\, \tau(X) + \varepsilon, \quad \varepsilon \sim N(0, \mathrm{noise\_sd}^2)}
+    so \eqn{e} is the coefficient one signal gene carries. Every gene of a
+    pathway pushes the same way, so a gene-set score over that pathway
+    tracks the effect it drives. The spreads follow from the counts:
+    \eqn{\mathrm{sd}(\tau) \approx e\sqrt{n_{pred} + 0.25}},
+    \eqn{\mathrm{sd}(\mu_0) \approx e\sqrt{n_{prog} + 1}} and
+    \eqn{\Pr(\tau < 0) \approx \Phi(-\mathrm{ate} / \mathrm{sd}(\tau))}.
+    Raising \code{n_pred} therefore raises the amount of heterogeneity rather
+    than dividing a fixed amount over more genes.
 }
-At the default size (\eqn{n=200 \ll p=500}) the heterogeneous effect is only
-modestly recoverable by any single estimator -- illustrating exactly why
-cfomics compares, selects and ensembles methods rather than trusting one.
-Recovery quality is a property of this data-generating process, not of
-cfomics, and is deliberately not emphasised in the vignette.
-The predictive genes are members of a real MSigDB Hallmark pathway
-(\code{HALLMARK_APOPTOSIS}); this only makes the biology-bridge recipe in the
-vignette coherent (enrichment against that gene set) and is **not** a claim
-of biological signal recovery — recovery accuracy is a property of the
-data-generating process, not of cfomics.
+The predictive genes are the first \code{n_pred} members of the MSigDB
+Hallmark pathway \code{HALLMARK_APOPTOSIS}, and the prognostic genes the
+first \code{n_prog} members of \code{HALLMARK_OXIDATIVE_PHOSPHORYLATION}
+(the two sets are disjoint), so the enrichment recipe in the vignette has a
+gene set to match against. The other \code{p - n_prog - n_pred} rows are
+real symbols drawn from the rest of the Hallmark collection and carry no
+signal.
 }
+\section{Gene names and their licence}{
+
+The gene symbols are drawn from the MSigDB hallmark collection (Liberzon et
+al. 2015). Set names and gene symbols from that collection are redistributed
+with the package under the Creative Commons Attribution 4.0 International
+licence (CC BY 4.0); nothing else of MSigDB is included.
+}
+
 \examples{
 if (requireNamespace("SummarizedExperiment", quietly = TRUE)) {
   se <- cf_example_data(n = 60, p = 200, seed = 1)
   se
   # ground truth is carried alongside the data
-  mean(SummarizedExperiment::colData(se)$cf_tau_true)   # ~ true ATE
+  mean(SummarizedExperiment::colData(se)$cf_tau_true)   # ~ ate
   table(SummarizedExperiment::rowData(se)$is_predictive)
 }
 
 }
+\references{
+Liberzon, Birger, Thorvaldsdóttir, Ghandi, Mesirov & Tamayo (2015) The
+Molecular Signatures Database hallmark gene set collection,
+\emph{Cell Syst.} 1(6):417-425.
+}
 \seealso{
-\code{\link{cf_fit}}, \code{\link{cf_compare}}, \code{\link{as_cf_data}}
+\code{\link{cf_fit}}, \code{\link{cf_compare}}
 }

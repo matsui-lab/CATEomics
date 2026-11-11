@@ -1,7 +1,7 @@
 """CEVAE extension exposing individual y0 and y1 predictions.
 
 Pyro's built-in `CEVAE.ite()` returns only the difference `y1 - y0`, hiding the
-two potential outcomes. cfomics needs both individually for the `mu0_hat` /
+two potential outcomes. CATEomics needs both individually for the `mu0_hat` /
 `mu1_hat` contract. `CEVAEExtended.predict_y(x)` mirrors the internals of the
 upstream `ite()` (py-why/pyro `pyro/contrib/cevae/__init__.py`, commit as of
 pyro 1.9.1) but returns `(y0_mean, y1_mean)` instead of collapsing them.
@@ -50,10 +50,10 @@ class _DeviceAwareZDist:
 class _NoWhiten(torch.nn.Module):
     """Identity replacement for pyro's ``PreWhitener``.
 
-    cfomics standardises the covariate matrix centrally on the R side
-    (``.cf_preprocess_input``: continuous columns z-scored, binary/one-hot kept
-    native). Pyro's ``PreWhitener`` would re-standardise every column (including
-    the binary indicators, undoing the skip), so it is replaced by this no-op.
+    CATEomics standardises the covariate matrix centrally on the R side
+    (``.cf_preprocess_input``: every column z-scored, binary indicators
+    included). Pyro's ``PreWhitener`` would standardise again on top of that,
+    so it is replaced by this no-op.
     Kept as a picklable ``nn.Module`` so the fitted model still serialises with
     ``torch.save``.
     """
@@ -91,12 +91,18 @@ class CEVAEExtended(CEVAE):
     ):
         """Seed-aware override of `pyro.contrib.cevae.CEVAE.fit`.
 
-        Identical to the upstream implementation (pyro 1.9.1) except the
-        `torch.Generator` used for DataLoader shuffling is seeded from the
-        torch global RNG. Upstream passes `torch.Generator(device=x.device)`
-        without a seed, so shuffle order is non-reproducible; for cfomics
-        reproducibility we derive its seed via `torch.randint` against the
-        already-seeded global generator.
+        Follows the upstream implementation (pyro 1.9.1) with these
+        differences: the `torch.Generator` used for DataLoader shuffling is
+        seeded from the torch global RNG (upstream passes
+        `torch.Generator(device=x.device)` without a seed, so the shuffle
+        order is not reproducible; the seed is derived via `torch.randint`
+        against the already-seeded global generator); the parameter store is
+        cleared and the module moved to the data's device before fitting;
+        `PreWhitener` is replaced with `_NoWhiten`, because the design matrix
+        arrives standardised and whitening it twice changes the numbers; the
+        latent prior is taken from the override of `model.z_dist`; and
+        upstream's assertion that the loss is not NaN is not repeated, so a
+        run that diverges returns rather than stopping inside pyro.
         """
         assert x.dim() == 2 and x.size(-1) == self.feature_dim
         assert t.shape == x.shape[:1]
@@ -117,8 +123,8 @@ class CEVAEExtended(CEVAE):
         self.to(x.device)
 
         # X is standardised centrally on the R side, so the pyro PreWhitener is
-        # replaced by an identity (see `_NoWhiten`) to avoid re-standardising the
-        # binary/one-hot columns. `.to(x.device)` is a no-op for the buffer-less
+        # replaced by an identity (see `_NoWhiten`) to avoid standardising
+        # twice. `.to(x.device)` is a no-op for the buffer-less
         # identity but kept for symmetry.
         self.whiten = _NoWhiten().to(x.device)
 
@@ -139,7 +145,7 @@ class CEVAEExtended(CEVAE):
         # serialised with torch.save; a fit-local closure could not.
         self.model.z_dist = _DeviceAwareZDist(_device, _latent_dim)
         # Cache device on model so predict_y can rebuild device-aware do() tensors
-        self.model._cfomics_device = _device
+        self.model._cateomics_device = _device
 
         # PyTorch 2.x DataLoader internally seeds via a cpu int64 tensor:
         #   self._base_seed = torch.empty((), dtype=torch.int64).random_(
@@ -253,7 +259,7 @@ class CEVAEExtended(CEVAE):
         draws and computes percentile-method CIs over `num_samples` posterior
         samples of z. Output is a dict with eight fields (`y0_hat`, `y1_hat`,
         `ite`, `ate`, `ate_ci_lower`, `ate_ci_upper`, `ite_ci_lower`,
-        `ite_ci_upper`) so the R side can populate `res$ate_ci` / `res$ite_ci`.
+        `ite_ci_upper`) so the R side can populate `res$ate_ci` / `res$tau_ci`.
         """
         if num_samples is None:
             num_samples = self.num_samples
@@ -368,18 +374,18 @@ def load_cevae(path, device=None):
     The nn-module parameters live on the model itself (predict reads the
     device from a registered parameter), so Pyro's global param store is not
     needed at predict time. The device-aware latent-z prior and the cached
-    ``_cfomics_device`` are re-synced to wherever the parameters were mapped
+    ``_cateomics_device`` are re-synced to wherever the parameters were mapped
     so the prior samples land on the same device as the parameters.
     """
     import torch
-    if device is None:
+    if device in ("gpu", "cuda") or device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model = torch.load(path, map_location=device, weights_only=False)
     try:
         dev = next(model.parameters()).device
         if hasattr(model.model, "z_dist") and hasattr(model.model.z_dist, "device"):
             model.model.z_dist.device = dev
-        model.model._cfomics_device = dev
+        model.model._cateomics_device = dev
     except Exception:
         pass
     return model

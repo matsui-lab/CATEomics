@@ -1,7 +1,7 @@
-"""cfomics wrapper for catenets TARNet / DragonNet.
+"""CATEomics wrapper for catenets TARNet / DragonNet.
 
 This thin module isolates the reticulate <-> Python boundary so the
-cfomics R side can:
+CATEomics R side can:
 
   * fit a TARNet / DragonNet via :func:`fit_tarnet` / :func:`fit_dragonnet`
   * receive `(cate, mu0_hat, mu1_hat)` as ``np.ndarray`` triplets
@@ -10,8 +10,8 @@ cfomics R side can:
 `catenets v0.2.x` keeps the ``seed`` constructor argument for
 train/validation splitting, but the per-batch shuffling and weight
 initialisation use the *global* numpy / torch / Python RNG state. This
-wrapper saves and restores those globals around each fit so cfomics tests
-get bit-exact reproducibility (max diff = 0).
+wrapper saves and restores those globals around each fit, so the seeding
+stays local to the fit.
 
 TARNet (Shalit-Johansson-Sontag ICML 2017) and DragonNet (Shi-Blei-Veitch
 NeurIPS 2019) are provided via catenets v0.2.x. CFRNet semantics are obtained
@@ -20,11 +20,58 @@ from TARNet with ``penalty_disc > 0``.
 
 from __future__ import annotations
 
+import contextlib
 import random as _py_random
+import sys
 import numpy as np
 import torch
 
 from catenets.models.torch import TARNet, DragonNet
+
+
+@contextlib.contextmanager
+def _pinned_device(device):
+    """Run the body with catenets' torch device forced to ``device``.
+
+    catenets v0.2.x takes no device argument. Each of its torch modules
+    holds a module-level ``DEVICE = torch.device("cuda" if
+    torch.cuda.is_available() else "cpu")``, decided when the module is
+    first imported, and its training loops call ``.to(DEVICE)``
+    unconditionally. Hiding the GPU with ``CUDA_VISIBLE_DEVICES`` from the
+    R side cannot steer that: the Python work runs in a basilisk worker
+    process that is reused across calls, and a process inherits the
+    environment only at spawn time, so a variable set afterwards never
+    reaches an interpreter that is already running. Rebind the constant
+    instead, and restore it after. catenets is the only backend that needs
+    this: the others take the device as an argument on every call.
+
+    ``sys.modules`` is scanned rather than a fixed list of module names
+    because several catenets modules take their own copy of the constant
+    with ``from ... import DEVICE``, so rebinding the defining module alone
+    would leave those copies pointing at the GPU.
+    """
+    want = str(device).lower()
+    if want in ("gpu", "cuda", "auto"):
+        target = (torch.device("cuda") if torch.cuda.is_available()
+                  else torch.device("cpu"))
+    elif want in ("cpu", "", "none"):
+        target = torch.device("cpu")
+    else:
+        raise ValueError("device must be one of cpu, gpu, cuda, auto; got %r"
+                         % (device,))
+    holders = [
+        m for name, m in list(sys.modules.items())
+        if name.startswith("catenets") and m is not None
+        and getattr(m, "DEVICE", None) is not None
+    ]
+    saved = [(m, m.DEVICE) for m in holders]
+    for m in holders:
+        m.DEVICE = target
+    try:
+        yield target
+    finally:
+        for m, old in saved:
+            m.DEVICE = old
 
 
 def _set_global_seeds(seed: int) -> None:
@@ -83,6 +130,7 @@ def fit_tarnet(
     n_iter=10000,
     batch_size=100,
     learning_rate=1e-4,
+    val_split_prop=0.3,
     device="cpu",
     **kwargs,
 ):
@@ -90,11 +138,10 @@ def fit_tarnet(
 
     Returns a dict with keys ``model``, ``mu0_hat``, ``mu1_hat``, ``ite``.
 
-    catenets v0.2.x does not expose a direct `device` parameter, so GPU
-    enable/disable is controlled on the cfomics side via the
-    `CUDA_VISIBLE_DEVICES` env var (cf_fit.R `.resolve_device()` sets it
-    empty when `device='cpu'`). With `device='gpu'` and a GPU available,
-    catenets' internal PyTorch uses CUDA automatically.
+    catenets v0.2.x does not expose a direct `device` parameter, so the
+    requested device is applied by :func:`_pinned_device`, which rebinds the
+    module-level ``DEVICE`` constant catenets reads. ``device='gpu'`` falls
+    back to the CPU when no GPU is visible.
     """
     X_np = np.asarray(X, dtype=np.float32)
     T_np = np.asarray(T, dtype=np.float32)
@@ -112,22 +159,21 @@ def fit_tarnet(
             n_iter=int(n_iter),
             batch_size=int(batch_size),
             lr=float(learning_rate),
+            # The fraction catenets holds out to decide when to stop; the
+            # weights see the rest. Explicit here so the default is visible
+            # rather than inherited silently from catenets.
+            val_split_prop=float(val_split_prop),
         )
         if random_state is not None:
             ctor_kwargs["seed"] = int(random_state)
-        # Filter kwargs by TARNet constructor signature. cf_compare forwards
-        # `...` to every method's fit, so per-method args from siblings (e.g.
-        # ganite `iterations`, cevae `num_epochs`) reach here via **kwargs and
-        # TARNet() rejects them with TypeError. Same pattern as the R-side
-        # `formals()` filter in cf_fit_grf.
-        import inspect as _inspect
-        _allowed = set(_inspect.signature(TARNet.__init__).parameters)
-        ctor_kwargs.update({k: v for k, v in kwargs.items() if k in _allowed})
+        # Extra hyperparameters come from the caller's `params` block, so an
+        # unknown name is a user error: let TARNet() raise TypeError.
+        ctor_kwargs.update(kwargs)
 
-        model = TARNet(**ctor_kwargs)
-        model.fit(X_np, Y_np, T_np)
-
-        cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
+        with _pinned_device(device):
+            model = TARNet(**ctor_kwargs)
+            model.fit(X_np, Y_np, T_np)
+            cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
         cate = _to_np(cate_t)
         mu0 = _to_np(mu0_t)
         mu1 = _to_np(mu1_t)
@@ -153,15 +199,16 @@ def fit_dragonnet(
     n_iter=10000,
     batch_size=100,
     learning_rate=1e-4,
+    val_split_prop=0.3,
     device="cpu",  # see fit_tarnet docstring for device handling
     **kwargs,
 ):
     """Fit a catenets DragonNet.
 
     DragonNet (Shi-Blei-Veitch 2019) shares the TARNet representation
-    head with an auxiliary propensity head; in catenets v0.2.x the
-    targeted-regularisation option is enabled internally when
-    ``binary_y=False``.
+    head and adds an auxiliary propensity head, whose binary cross-entropy
+    enters the training loss weighted by ``prop_loss_multiplier``. catenets
+    v0.2.x implements no targeted regularisation.
 
     Returns a dict with the same shape as :func:`fit_tarnet`.
     """
@@ -180,19 +227,21 @@ def fit_dragonnet(
             n_iter=int(n_iter),
             batch_size=int(batch_size),
             lr=float(learning_rate),
+            # The fraction catenets holds out to decide when to stop; the
+            # weights see the rest. Explicit here so the default is visible
+            # rather than inherited silently from catenets.
+            val_split_prop=float(val_split_prop),
         )
         if random_state is not None:
             ctor_kwargs["seed"] = int(random_state)
-        # Filter kwargs by DragonNet ctor signature; see fit_tarnet for the
-        # same handling.
-        import inspect as _inspect
-        _allowed = set(_inspect.signature(DragonNet.__init__).parameters)
-        ctor_kwargs.update({k: v for k, v in kwargs.items() if k in _allowed})
+        # See fit_tarnet: an unknown name is a user error, so DragonNet()
+        # raises rather than the wrapper dropping it.
+        ctor_kwargs.update(kwargs)
 
-        model = DragonNet(**ctor_kwargs)
-        model.fit(X_np, Y_np, T_np)
-
-        cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
+        with _pinned_device(device):
+            model = DragonNet(**ctor_kwargs)
+            model.fit(X_np, Y_np, T_np)
+            cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
         cate = _to_np(cate_t)
         mu0 = _to_np(mu0_t)
         mu1 = _to_np(mu1_t)
@@ -209,10 +258,17 @@ def fit_dragonnet(
     }
 
 
-def predict_with(model, X):
-    """Predict (cate, mu0, mu1) on new X for a previously-fit model."""
+def predict_with(model, X, device="cpu"):
+    """Predict (cate, mu0, mu1) on new X for a previously-fit model.
+
+    Pinned the same way as the fit: the forward pass also reads the
+    module-level ``DEVICE`` to place its input tensors, so leaving it alone
+    would move a CPU-trained model's prediction onto whatever GPU happens to
+    be visible.
+    """
     X_np = np.asarray(X, dtype=np.float32)
-    cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
+    with _pinned_device(device):
+        cate_t, mu0_t, mu1_t = model.predict(X_np, return_po=True)
     return {
         "ite": _to_np(cate_t),
         "mu0_hat": _to_np(mu0_t),
@@ -235,7 +291,9 @@ def load_model(path, device=None):
     so both are set to the resolved device.
     """
     import torch
-    if device is None:
+    if device is None or (str(device).startswith("cuda")
+                          and not torch.cuda.is_available()):
+        # A model fitted on a GPU can be asked for on a host without one.
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model = torch.load(path, map_location=device, weights_only=False)
     try:

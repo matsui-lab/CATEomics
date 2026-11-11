@@ -2,31 +2,38 @@
 % Please edit documentation in R/cf_plot.R
 \name{cf_plot_evaluate}
 \alias{cf_plot_evaluate}
-\title{Plot a cf_evaluate result: RATE curve, GATES bars, or BLP calibration.}
+\title{Plot a cf_evaluate result: TOC curve, GATES bars, or BLP calibration.}
 \usage{
 cf_plot_evaluate(eval, type = c("rate", "gates", "blp"), ...)
 }
 \arguments{
-\item{eval}{A \code{cfomics_evaluate} object (from \code{cf_evaluate}).}
+\item{eval}{A \code{cateomics_evaluate} object (from \code{cf_evaluate}).}
 
-\item{type}{Which view: \code{"rate"} (TOC(q) targeting-operator curve,
-default), \code{"gates"} (group ATE bars with an overall-ATE line), or
-\code{"blp"} (best-linear-predictor calibration of predicted vs observed).}
+\item{type}{Which view: \code{"rate"} (the TOC curve over q, default),
+\code{"gates"} (group ATE bars with an overall-ATE line), or
+\code{"blp"} (best-linear-predictor calibration: the DR pseudo-outcome
+against the predicted effect, one point per sample, with the fitted line
+and a slope-1 reference).}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
 A ggplot object.
+
+  The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+  themes or scales to it restyles the panel. The single colours are set as
+  constants rather than mapped, so a colour scale added afterwards does not
+  reach them.
 }
 \description{
-Plot a cf_evaluate result: RATE curve, GATES bars, or BLP calibration.
+Plot a cf_evaluate result: TOC curve, GATES bars, or BLP calibration.
 }
 \examples{
-# Evaluate a fast R-native causal forest, then plot the RATE curve.
+# Evaluate a fast R-native causal forest, then plot the TOC curve.
 se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
 fit <- cf_fit(data = se, Y = "outcome", T = "treatment",
               X_baseline = c("age", "sex"), method = "grf",
               n_features = 40, partition = "oof")
-ev <- cf_evaluate(fit, eval_nuisance = "rf", eval_propensity_score = 0.5)
+ev <- cf_evaluate(fit)
 cf_plot_evaluate(ev, type = "rate")
 }

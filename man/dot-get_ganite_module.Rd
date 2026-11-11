@@ -13,32 +13,41 @@ The Python module object for the ganite backend.
 Internal functions for the GANITE causal inference method.
 
 GANITE (Generative Adversarial Nets for Inference of Individualized
-Treatment Effects) uses GANs to estimate individual treatment effects.
-The implementation follows the loss formulation of Yoon et al. (2018,
-Section 4), with the sigmoid output replaced by a linear head and BCE on
-Y replaced by MSE to support continuous outcomes. The paper's four loss
-components are all retained:
+Treatment Effects) estimates individual treatment effects with two
+adversarial blocks, implemented for CATEomics in
+\code{inst/python/ganite_impl.py} on PyTorch:
 \itemize{
-  \item Counterfactual block: \eqn{V_{CF}} (BCE on t) + \eqn{\alpha \cdot L_S^G}
-    (factual MSE).
-  \item ITE block (k = 2 binary T): \eqn{V_{ITE}} (BCE distinguishing
-    \eqn{\bar y} from \eqn{\hat y}) + \eqn{\beta \cdot L_S^I} with
-    \eqn{L_S^I = ((\bar y_1 - \bar y_0) - (\hat y_1 - \hat y_0))^2}.
+  \item Counterfactual block: a generator \eqn{G} completes the unobserved
+    outcome and a discriminator \eqn{D_G} tells which of the pair was
+    observed. \eqn{G} minimises \eqn{V_{CF} + \alpha \cdot L_S^G}, the
+    supervised term being the squared error on the observed outcome, or a
+    cross-entropy when the outcome is binary.
+  \item ITE block (k = 2, binary T): an inference network \eqn{I} is fitted
+    to the completed data and a discriminator \eqn{D_I} tells \eqn{I}'s pair
+    from \eqn{G}'s. \eqn{I} minimises \eqn{V_{ITE} + \beta \cdot L_S^I}
+    with \eqn{L_S^I = ((\bar y_1 - \bar y_0) - (\hat y_1 - \hat y_0))^2}.
 }
+Each block runs \code{iterations} steps, and in each step the discriminator
+is updated \code{d_steps} times before its counterpart once. The losses of
+both blocks are recorded in \code{meta$estimator$training_trace}, one row
+per 100 steps and one for the step each block ended on; the columns are
+\code{block}, \code{iteration}, and \code{d_g} / \code{g} / \code{g_factual} for the
+counterfactual block and \code{d_i} / \code{i} / \code{l_s_i} for the ITE
+block, with the other block's columns \code{NA}. \code{d_i} is the sum of
+two cross-entropies and \code{d_g} a single one, so the two are not on one
+scale. With a binary outcome the heads are read through a logistic function,
+so \code{mu0_hat} / \code{mu1_hat} are probabilities in \code{[0, 1]} and
+the effect is their difference.
 
 Reference: Jinsung Yoon, James Jordon, Mihaela van der Schaar,
 "GANITE: Estimation of Individualized Treatment Effects using Generative
 Adversarial Nets", ICLR 2018. \url{https://openreview.net/forum?id=ByKWUeWA-}
 Get GANITE Python module
 
-Uses PyPI ganite 0.1.2 (Yoon 2018 official PyTorch implementation) via
-`ganite_wrapper.py`, which imports `from ganite import Ganite`. The former
-self-hosted TensorFlow backend was removed so it cannot shadow the PyPI
-package on `sys.path`.
+\code{ganite_wrapper.py} is the R-facing entry over \code{ganite_impl.py}.
 
-Backend: PyPI ganite (PyTorch), with native Blackwell sm_120 support. A
-3-source RNG (numpy + torch + random) save/restore around the fit prevents
-global state leak; a module-global DEVICE override respects the caller's
-device choice.
+Seeding is local: the model seeds torch and its own mini-batch generator
+from \code{random_state}, and \code{.cf_py_run()} snapshots and restores the caller's
+global numpy / random / torch state. The device is passed on every call.
 }
 \keyword{internal}

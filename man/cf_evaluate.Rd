@@ -10,12 +10,8 @@ cf_evaluate(
   n_groups = 5L,
   target_quantile = 0.2,
   rate_quantiles = seq(0.1, 1, by = 0.1),
-  direction = c("positive", "negative"),
-  eval_nuisance = "rf",
-  eval_propensity_score = NULL,
-  random_state = NULL,
-  device = c("auto", "cpu", "gpu"),
-  ...
+  n_bootstrap = 200L,
+  random_state = 0L
 )
 }
 \arguments{
@@ -25,66 +21,108 @@ or an element of \code{cf_compare()$models}.}
 \item{metrics}{Character vector subset of
 \code{c("rate", "blp", "gates")} (default all 3).}
 
-\item{n_groups}{Integer, GATES quantile bins (default 5).}
+\item{n_groups}{Integer (default 5), the number of quantile bins the GATES
+group effects are taken over. It moves \code{gates} only.}
 
-\item{target_quantile}{Numeric in (0,1], top-q fraction for RATE
-point estimate (default 0.2).}
+\item{target_quantile}{Numeric in (0,1], the treated fraction the
+reported \code{rate$toc} is taken at (default 0.2).}
 
-\item{rate_quantiles}{Numeric grid in (0,1], RATE curve quantiles
-(default \code{seq(0.1, 1.0, by = 0.1)}).}
+\item{rate_quantiles}{Numeric grid in (0,1], the treated fractions the
+TOC curve is drawn on and AUTOC averages over (default
+\code{seq(0.1, 1.0, by = 0.1)}).}
 
-\item{direction}{Character, \code{"positive"} (treat top-q\% by
-tau-hat) or \code{"negative"} (treat bottom-q\%).}
+\item{n_bootstrap}{Integer, half-sample bootstrap replicates for the
+metric intervals (default 200).}
 
-\item{eval_nuisance}{Base learner for shared nuisance when
-recomputation is needed (default \code{"rf"}).}
-
-\item{eval_propensity_score}{Optional known propensity score (scalar in
-(0,1) or length-n vector) for the independent shared evaluation nuisance;
-used in a randomised-trial context. \code{NULL} (default)
-estimates the propensity internally.}
-
-\item{random_state}{Integer seed or NULL.}
-
-\item{device}{One of \code{"auto"} (default), \code{"cpu"}, \code{"gpu"};
-broadcast to internal cf_fit calls for any re-fitting required by metrics
-(additive; the metric path currently performs no re-fitting, so this is
-pass-through).}
-
-\item{...}{Ignored.}
+\item{random_state}{Integer seed (default \code{0}) or NULL.}
 }
 \value{
-Object of class \code{c("cfomics_evaluate", "list")}.
+Object of class \code{c("cateomics_evaluate", "list")} holding
+  the requested metrics: \code{rate} (\code{toc} at the target quantile
+  with its SE and interval, \code{autoc}, and \code{curve}, the TOC over
+  the quantile grid), \code{blp} (the slope with both null hypotheses, the
+  intercept and the per-sample \code{points} the regression was fitted
+  on), \code{gates} (the group effects and the top-minus-bottom test, plus
+  \code{degenerate} and, when that is \code{TRUE}, a \code{message} saying
+  why the groups could not be formed) and
+  \code{metadata} (the settings, and \code{ci_method}, the one standard
+  error construction behind every interval and p-value in the object).
+
+  \code{blp$points} has one row per sample, \code{predicted} (the
+  tau-hat that was evaluated) and \code{observed} (its DR pseudo-outcome);
+  \code{blp$intercept} is the fitted value at the mean tau-hat, which with
+  the centred regressor is the DR ATE.
+
+  \code{blp$heterogeneity_loading} tests the slope against zero. It is
+  named after the coefficient rather than after the property because the
+  slope is zero in two cases: when there is no heterogeneity, and when
+  \code{tau_hat} is pure noise (Chernozhukov et al. call it the
+  heterogeneity loading parameter).
+
+  Four of the reported quantities carry two p-values from the same estimate
+  and the same standard error: \code{rate$p_value},
+  \code{rate$autoc$p_value}, \code{gates$top_bottom_test$p_value} and
+  \code{blp$heterogeneity_loading$p_value} are two-sided, and each has a
+  \code{p_value_one_sided} beside it for the alternative that the quantity
+  is greater than zero. \code{blp$calibration} (H0: slope = 1) has the
+  two-sided p-value only, because a slope above 1 and a slope below 1 are
+  both a failure of calibration. The reported intervals
+  (\code{ci_lower} / \code{ci_upper}) are two-sided throughout, so a
+  one-sided p-value between 0.025 and 0.05 sits beside an interval that
+  contains zero. Both are reported; which one answers the question asked is
+  the reader's to decide.
 }
 \description{
 Compute the default three evaluation metrics for CATE-capable models:
 \itemize{
   \item \strong{RATE} (Yadlowsky, Fleming, Shah, Brunskill & Wager 2025,
-        JASA). Targeting contrast for the top-\code{target_quantile}
-        fraction by predicted treatment effect; also returns a per-quantile
-        curve \code{rate_curve} and the area under it, \code{rate$autoc}
-        (AUTOC = mean over the q-grid of TOC(q), with an influence-function
-        SE).
+        JASA). The family is the integral of a weighted Targeting Operator
+        Characteristic, \eqn{\int \alpha(q)\,TOC(q)\,dq}, with
+        \eqn{TOC(q) = \bar Y_{DR}(\mathrm{top}\ q) - \bar Y_{DR}}.
+        \code{rate$toc} is \eqn{TOC(q)} at \code{q = target_quantile},
+        \code{rate$curve} is \eqn{TOC(q)} over the
+        \code{rate_quantiles} grid, and \code{rate$autoc} is the grid
+        mean of that curve (AUTOC, the \eqn{\alpha = 1} weighting).
   \item \strong{BLP} (Chernozhukov, Demirer, Duflo & Fernández-Val 2025,
-        \emph{Econometrica} 93(4); Generic ML). The single slope of
-        \eqn{Y \sim T + (T-\bar{T}) \hat\tau_{centered}}, tested against
-        H0 = 1 (calibration) and H0 = 0 (heterogeneity).
-  \item \strong{GATES} group-ATE on tau-hat quantile bins plus a Best-Worst
-        heterogeneity test (non-parametric; degrades gracefully when tau-hat
-        is near-constant).
+        \emph{Econometrica} 93(4); Generic ML). The slope of
+        \eqn{Y_{DR} \sim \hat\tau_{centered}}, tested against
+        H0 = 1 (calibration) and H0 = 0 (the heterogeneity loading).
+  \item \strong{GATES} group-ATE on tau-hat quantile bins plus a
+        top-minus-bottom group test (non-parametric; degrades gracefully
+        when tau-hat is near-constant).
 }
 
 Operates on the OOF tau-hat saved by \code{cf_compare} /
 \code{cf_fit(partition = 'oof')} (\code{model$res$tau_hat_oof}). When
 the model lacks OOF tau-hat, falls back to in-sample tau-hat
-(\code{model$res$tau_hat}) and emits \code{cfomics_partition_none_warning}.
+(\code{model$res$tau_hat}) and emits \code{cateomics_partition_none_warning}.
 }
 \details{
-nuisance for DR pseudo-outcomes / GATES / BLP is the independent
-shared evaluation nuisance (\code{model$res$nuisance}: cf_compare's shared
-\code{nuisance_oof} or a cf_fit-side independent eval nuisance), recomputed
-via \code{eval_nuisance = "rf"} OOF when absent. The method is never scored
-with its own internal nuisance.
+The nuisance for DR pseudo-outcomes / GATES / BLP is the independent shared
+evaluation nuisance the model was scored with (\code{model$res$nuisance}:
+cf_compare's shared \code{nuisance_oof}, or the cf_fit-side one). The method
+is never scored with its own internal nuisance, and the nuisance is not
+refitted here: it is configured in \code{cf_fit()} / \code{cf_compare()},
+so the comparison and the evaluation read the same one.
+
+TOC, AUTOC and the GATES best-minus-worst contrast all score the units with
+the \emph{largest} \code{tau_hat}, on CATEomics' convention that a larger
+\code{Y} is the better outcome (see \code{Y} in \code{\link{cf_fit}}).
+For an outcome whose smaller values are better, fit the negated outcome
+rather than reading these metrics the other way round: that keeps
+\code{\link{cf_benefit_groups}}, \code{\link{cf_interpret}},
+\code{\link{cf_rule}} and the plots pointing the same way.
+
+Standard errors for TOC, AUTOC, GATES and the BLP slope come from a
+half-sample bootstrap: \code{n_bootstrap} replicates of \code{floor(n / 2)}
+rows drawn without replacement, with the ranking, the quantile bins and the
+quantile threshold rebuilt inside each replicate. The reported intervals are
+\eqn{\hat\theta \pm 1.96\,SE} and the p-values are the normal-approximation
+two-sided tests on the same SE; \code{metadata$ci_method} names the
+standard error behind all of them. They cover the variability of these
+quantities given
+\code{tau_hat} and the nuisance, not the variability of having estimated
+those.
 }
 \examples{
 # Evaluate a fast R-native causal forest with an independent nuisance.
@@ -92,9 +130,18 @@ se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
 fit <- cf_fit(data = se, Y = "outcome", T = "treatment",
               X_baseline = c("age", "sex"), method = "grf",
               n_features = 40, partition = "oof")
-# known randomised propensity; independent nuisance for the score
-ev <- cf_evaluate(fit, eval_nuisance = "rf", eval_propensity_score = 0.5)
+# the fit carries the evaluation nuisance it was scored with
+ev <- cf_evaluate(fit)
 ev
+}
+\references{
+Yadlowsky, Fleming, Shah, Brunskill & Wager (2025) Evaluating treatment
+prioritization rules via rank-weighted average treatment effects,
+\emph{JASA} 120(549):38-51 (RATE / TOC / AUTOC).
+
+Chernozhukov, Demirer, Duflo & Fernández-Val (2025) Fisher-Schultz Lecture:
+Generic machine learning inference on heterogeneous treatment effects in
+randomized experiments, \emph{Econometrica} 93(4):1121-1164 (GATES / BLP).
 }
 \seealso{
 \code{\link{cf_compare}}, \code{\link{cf_select}},

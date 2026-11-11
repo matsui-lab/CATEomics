@@ -1,66 +1,83 @@
-#' Simulate an example omics dataset for cfomics
+# The largest `p` cf_example_data() accepts. The pools can reach a little
+# further, by an amount that depends on n_prog and n_pred, so one stated
+# maximum is published instead (see the comment at the cap check).
+.CF_EXAMPLE_MAX_P <- 4000L
+
+
+#' Simulate an example omics dataset for CATEomics
 #'
 #' Generates a small semi-synthetic \code{SummarizedExperiment} of bulk RNA-seq
 #' counts with a known heterogeneous treatment effect, for use in examples,
-#' vignettes and quick experimentation. The design mimics the \eqn{n \ll p}
-#' regime that cfomics targets: many genes, few samples, a randomised treatment,
+#' vignettes and quick experimentation. The design is \eqn{n \ll p}:
+#' many genes, few samples, a randomised treatment,
 #' and a continuous outcome whose conditional average treatment effect (CATE)
 #' depends on a handful of genes and on a clinical effect-modifier.
 #'
 #' @details
-#' The data are **fully simulated** and carry no biological meaning; they exist
-#' only to make the workflow runnable end-to-end. The generating process is:
+#' The data are \strong{fully simulated} and carry no biological meaning; they exist
+#' only to make the workflow runnable end-to-end. Every argument is a constant
+#' of the generating process, so the moments below follow from the arguments
+#' without any hidden rescaling.
 #' \itemize{
-#'   \item **Expression.** Per-gene mean counts are drawn from a log-normal
+#'   \item \strong{Expression.} Per-gene mean counts are drawn from a log-normal
 #'     distribution (to give a realistic dynamic range) and counts are sampled
-#'     from a negative-binomial distribution (\code{\link[stats]{rnbinom}}), the
-#'     standard model for bulk RNA-seq (as in edgeR / DESeq2). Prognostic and
+#'     from a negative-binomial distribution (\code{\link[stats]{rnbinom}}).
+#'     Prognostic and
 #'     predictive genes are given higher dispersion so they carry across-sample
 #'     variation and survive default variance-based feature selection.
-#'   \item **Signal scale.** The outcome model is defined on the *normalised*
+#'   \item \strong{Signal scale.} The outcome model is defined on the \emph{normalised}
 #'     expression scale: per-gene log2-CPM values are z-scored internally
-#'     (\code{z(logCPM)}), matching the log-CPM transform cfomics applies. The
+#'     (\eqn{z_g}), on the same scale as the log-CPM transform CATEomics
+#'     applies (this generator uses no TMM step and a different offset). The
 #'     treatment effect is therefore a smooth function of normalised expression,
 #'     not of raw counts.
-#'   \item **Clinical covariates.** \code{age} (\eqn{\sim N(60, 10)}) is
-#'     *prognostic* (enters the baseline \eqn{\mu_0}); \code{sex}
-#'     (\code{"F"}/\code{"M"}) is an *effect-modifier* (shifts the treatment
-#'     effect \eqn{\tau}), illustrating both a numeric covariate and a factor
-#'     that is one-hot expanded downstream.
-#'   \item **Treatment.** Randomised (\eqn{\Pr(T=1)=0.5}, no confounding), so
+#'   \item \strong{Clinical covariates.} \code{age} (\eqn{\sim N(60, 10)}) enters
+#'     the baseline \eqn{\mu_0}; \code{sex} (\code{"F"}/\code{"M"}) shifts the
+#'     treatment effect \eqn{\tau}; \code{sex} is one-hot expanded downstream.
+#'   \item \strong{Treatment.} Randomised (\eqn{\Pr(T=1)=0.5}, no confounding), so
 #'     the setting is an RCT.
-#'   \item **Outcome.**
-#'     \deqn{\mu_0(X) = v_{age}\, z(age) + \sum_{g \in \mathrm{prog}} v_g\, z(logCPM_g)}
-#'     \deqn{\tau(X)  = ATE + \delta\, [sex = M] + \sum_{g \in \mathrm{pred}} w_g\, z(logCPM_g)}
-#'     \deqn{Y = \mu_0(X) + T\, \tau(X) + \varepsilon, \quad \varepsilon \sim N(0, \sigma^2)}
-#'     The prognostic (\eqn{\mu_0}) and predictive (\eqn{\tau}) signals are of
-#'     comparable strength (\eqn{\mathrm{Var}(\mu_0) \approx \mathrm{Var}(\tau)}),
-#'     and \eqn{\sigma} is set so that
-#'     \eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)} equals \code{snr}. A
-#'     minority of individuals have \eqn{\tau < 0}, so treatment-rule and
-#'     benefit-group analyses are non-trivial.
+#'   \item \strong{Outcome.} With \eqn{e} = \code{effect_size} and
+#'     \eqn{z(age)} the standardised age,
+#'     \deqn{\mu_0(X) = e \left( \sum_{g \in \mathrm{prog}} z_g + z(age) \right)}
+#'     \deqn{\tau(X)  = \mathrm{ate} + e \left( \sum_{g \in \mathrm{pred}} z_g + 1[sex = M] - 1/2 \right)}
+#'     \deqn{Y = \mu_0(X) + T\, \tau(X) + \varepsilon, \quad \varepsilon \sim N(0, \mathrm{noise\_sd}^2)}
+#'     so \eqn{e} is the coefficient one signal gene carries. Every gene of a
+#'     pathway pushes the same way, so a gene-set score over that pathway
+#'     tracks the effect it drives. The spreads follow from the counts:
+#'     \eqn{\mathrm{sd}(\tau) \approx e\sqrt{n_{pred} + 0.25}},
+#'     \eqn{\mathrm{sd}(\mu_0) \approx e\sqrt{n_{prog} + 1}} and
+#'     \eqn{\Pr(\tau < 0) \approx \Phi(-\mathrm{ate} / \mathrm{sd}(\tau))}.
+#'     Raising \code{n_pred} therefore raises the amount of heterogeneity rather
+#'     than dividing a fixed amount over more genes.
 #' }
-#' At the default size (\eqn{n=200 \ll p=500}) the heterogeneous effect is only
-#' modestly recoverable by any single estimator -- illustrating exactly why
-#' cfomics compares, selects and ensembles methods rather than trusting one.
-#' Recovery quality is a property of this data-generating process, not of
-#' cfomics, and is deliberately not emphasised in the vignette.
-#' The predictive genes are members of a real MSigDB Hallmark pathway
-#' (\code{HALLMARK_APOPTOSIS}); this only makes the biology-bridge recipe in the
-#' vignette coherent (enrichment against that gene set) and is **not** a claim
-#' of biological signal recovery — recovery accuracy is a property of the
-#' data-generating process, not of cfomics.
+#' The predictive genes are the first \code{n_pred} members of the MSigDB
+#' Hallmark pathway \code{HALLMARK_APOPTOSIS}, and the prognostic genes the
+#' first \code{n_prog} members of \code{HALLMARK_OXIDATIVE_PHOSPHORYLATION}
+#' (the two sets are disjoint), so the enrichment recipe in the vignette has a
+#' gene set to match against. The other \code{p - n_prog - n_pred} rows are
+#' real symbols drawn from the rest of the Hallmark collection and carry no
+#' signal.
 #'
-#' @param n Integer, number of samples (columns). Default 200.
-#' @param p Integer, number of genes (rows). Default 500. Must exceed
-#'   \code{n_prog + n_pred}.
+#' @param n Integer, number of samples (columns). Default 150.
+#' @param p Integer, number of genes (rows). Default 600. Must exceed
+#'   \code{n_prog + n_pred}, and at most 4000. The pools hold more symbols than
+#'   that, but how many a call can reach depends on \code{n_prog} and
+#'   \code{n_pred}, so one stated maximum below the smallest of them is easier
+#'   to rely on.
 #' @param n_prog Integer, number of prognostic genes (drive \eqn{\mu_0}).
-#'   Default 20.
+#'   Default 5. At most 194: the members of the prognostic pathway that are not
+#'   also in the predictive one.
 #' @param n_pred Integer, number of predictive genes (drive \eqn{\tau}).
-#'   Default 10.
-#' @param snr Numeric, target treatment-effect signal-to-noise ratio
-#'   \eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)}. Default 1.5.
-#' @param seed Integer, random seed. The caller's RNG state is restored on exit.
+#'   Default 5. At most 161, every member of the predictive pathway.
+#' @param effect_size Numeric, the coefficient one signal gene carries on the
+#'   z-scored expression scale (default 1.5); it scales both \eqn{\mu_0} and
+#'   \eqn{\tau}.
+#' @param ate Numeric, the constant term of \eqn{\tau}, i.e. the average
+#'   treatment effect (default 0, so about half the samples are harmed).
+#' @param noise_sd Numeric, the standard deviation of the outcome noise
+#'   \eqn{\varepsilon} (default 1).
+#' @param seed Integer, random seed (default \code{1}). The caller's RNG state
+#'   is restored on exit.
 #'
 #' @return A \code{\link[SummarizedExperiment]{SummarizedExperiment}} with one
 #'   \code{counts} assay (\code{p} genes x \code{n} samples, real gene symbols as
@@ -71,9 +88,12 @@
 #'       true individual treatment effect).}
 #'     \item{\code{rowData}}{\code{is_prognostic} and \code{is_predictive}
 #'       logical flags marking the signal genes.}
-#'     \item{\code{metadata}}{\code{cf_pathway} (the embedded pathway name),
-#'       \code{cf_predictive_genes}, \code{cf_prognostic_genes},
-#'       \code{cf_true_ate}, \code{cf_snr} (realised), and the call parameters.}
+#'     \item{\code{metadata}}{\code{cf_pathway} (the pathway the predictive
+#'       genes come from), \code{cf_predictive_genes},
+#'       \code{cf_prognostic_genes}, \code{cf_true_ate} (the realised mean of
+#'       \eqn{\tau}), \code{cf_snr} (the realised
+#'       \eqn{\mathrm{Var}(\tau)/\mathrm{Var}(\varepsilon)}), and
+#'       \code{cf_params} (the call).}
 #'   }
 #'
 #' @examples
@@ -81,37 +101,117 @@
 #'   se <- cf_example_data(n = 60, p = 200, seed = 1)
 #'   se
 #'   # ground truth is carried alongside the data
-#'   mean(SummarizedExperiment::colData(se)$cf_tau_true)   # ~ true ATE
+#'   mean(SummarizedExperiment::colData(se)$cf_tau_true)   # ~ ate
 #'   table(SummarizedExperiment::rowData(se)$is_predictive)
 #' }
 #'
-#' @seealso \code{\link{cf_fit}}, \code{\link{cf_compare}}, \code{\link{as_cf_data}}
+#' @section Gene names and their licence:
+#' The gene symbols are drawn from the MSigDB hallmark collection (Liberzon et
+#' al. 2015). Set names and gene symbols from that collection are redistributed
+#' with the package under the Creative Commons Attribution 4.0 International
+#' licence (CC BY 4.0); nothing else of MSigDB is included.
+#'
+#' @seealso \code{\link{cf_fit}}, \code{\link{cf_compare}}
+#' @references
+#' Liberzon, Birger, Thorvaldsdóttir, Ghandi, Mesirov & Tamayo (2015) The
+#' Molecular Signatures Database hallmark gene set collection,
+#' \emph{Cell Syst.} 1(6):417-425.
+#'
 #' @export
-cf_example_data <- function(n = 200L, p = 500L,
-                            n_prog = 20L, n_pred = 10L,
-                            snr = 1.5, seed = 1L) {
+cf_example_data <- function(n = 150L, p = 600L,
+                            n_prog = 5L, n_pred = 5L,
+                            effect_size = 1.5, ate = 0, noise_sd = 1,
+                            seed = 1L) {
   if (!requireNamespace("SummarizedExperiment", quietly = TRUE) ||
       !requireNamespace("S4Vectors", quietly = TRUE)) {
     rlang::abort(
       "cf_example_data() requires the 'SummarizedExperiment' and 'S4Vectors' packages.",
-      class = "cfomics_missing_package_error"
+      class = "cateomics_missing_package_error"
     )
   }
+  # Every argument is checked before `set.seed()` runs. A seed that cannot be
+  # coerced would otherwise raise base R's own error once the RNG-restoring
+  # on.exit() had been registered, which adds a second, unrelated warning. The
+  # counts are checked for being whole numbers because as.integer() truncates,
+  # so n_pred = 5.7 would otherwise plant five genes without saying so.
+  .cf_check_scalar <- function(x, nm) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      rlang::abort(sprintf("%s must be a finite numeric scalar of length 1.", nm),
+                   class = "cateomics_arg_error")
+    }
+  }
+  .cf_check_count <- function(x, nm) {
+    .cf_check_scalar(x, nm)
+    if (x != trunc(x)) {
+      rlang::abort(sprintf("%s must be a whole number (got %s).", nm, format(x)),
+                   class = "cateomics_arg_error")
+    }
+  }
+  .cf_check_count(n, "n")
+  .cf_check_count(p, "p")
+  .cf_check_count(n_prog, "n_prog")
+  .cf_check_count(n_pred, "n_pred")
+  .cf_check_count(seed, "seed")
+  .cf_check_scalar(effect_size, "effect_size")
+  .cf_check_scalar(ate, "ate")
+  .cf_check_scalar(noise_sd, "noise_sd")
   n      <- as.integer(n)
   p      <- as.integer(p)
   n_prog <- as.integer(n_prog)
   n_pred <- as.integer(n_pred)
-  if (anyNA(c(n, p, n_prog, n_pred)) || n < 4L || p < 10L ||
-      n_prog < 1L || n_pred < 1L) {
+  seed   <- as.integer(seed)
+  if (n < 4L || p < 10L || n_prog < 1L || n_pred < 1L) {
     rlang::abort("n, p, n_prog and n_pred must be positive integers (n >= 4, p >= 10).",
-                 class = "cfomics_arg_error")
+                 class = "cateomics_arg_error")
   }
   if (n_prog + n_pred >= p) {
-    rlang::abort("p must exceed n_prog + n_pred.", class = "cfomics_arg_error")
+    rlang::abort("p must exceed n_prog + n_pred.", class = "cateomics_arg_error")
   }
-  if (!is.numeric(snr) || length(snr) != 1L || snr <= 0) {
-    rlang::abort("snr must be a positive scalar.", class = "cfomics_arg_error")
+  if (effect_size <= 0) {
+    rlang::abort("effect_size must be positive.", class = "cateomics_arg_error")
   }
+  if (noise_sd <= 0) {
+    rlang::abort("noise_sd must be positive.", class = "cateomics_arg_error")
+  }
+
+  genes <- .cateomics_example_genes
+  if (n_pred > length(genes$predictive)) {
+    rlang::abort(
+      c(sprintf("`n_pred` = %d is more than the %d members of %s that are shipped.",
+                n_pred, length(genes$predictive), genes$pathway_name),
+        i = sprintf("The predictive signal is planted in members of that pathway, so n_pred <= %d.",
+                    length(genes$predictive))),
+      class = "cateomics_arg_error"
+    )
+  }
+  if (n_prog > length(genes$prognostic)) {
+    rlang::abort(
+      c(sprintf("`n_prog` = %d is more than the %d members of %s that are shipped.",
+                n_prog, length(genes$prognostic), genes$prognostic_pathway_name),
+        i = sprintf("The prognostic signal is planted in members of that pathway, so n_prog <= %d.",
+                    length(genes$prognostic))),
+      class = "cateomics_arg_error"
+    )
+  }
+
+  # `p` is capped at a stated number rather than at everything the pools can
+  # reach. The background pool holds every Hallmark symbol except the curated
+  # head of the two signal pools, so how many symbols a call can actually use
+  # depends on n_prog and n_pred, and one documented maximum is easier to rely
+  # on than that figure. The cap is below the smallest value it can take, so
+  # the draw below can never run short; nothing needs the rest, since the
+  # default is 600 rows. Checking here also beats `sample()`'s "larger than the
+  # population" further down.
+  if (p > .CF_EXAMPLE_MAX_P) {
+    rlang::abort(
+      c(sprintf("`p` = %d is more genes than this generator offers.", p),
+        i = sprintf("Use p <= %d.", .CF_EXAMPLE_MAX_P)),
+      class = "cateomics_arg_error"
+    )
+  }
+  predictive <- genes$predictive[seq_len(n_pred)]
+  prognostic <- genes$prognostic[seq_len(n_prog)]
+  signal     <- c(prognostic, predictive)
 
   # Restore the caller's RNG state on exit (see CLAUDE.md RNG convention).
   if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
@@ -120,23 +220,8 @@ cf_example_data <- function(n = 200L, p = 500L,
   } else {
     on.exit(rm(list = ".Random.seed", envir = globalenv()), add = TRUE)
   }
-  set.seed(as.integer(seed))
+  set.seed(seed)
 
-  genes <- .cfomics_example_genes
-  predictive <- genes$predictive[seq_len(min(n_pred, length(genes$predictive)))]
-  prognostic <- genes$prognostic[seq_len(min(n_prog, length(genes$prognostic)))]
-  # If the caller asks for more signal genes than the curated pools hold, top up
-  # from the real noise pool so the counts still line up.
-  if (length(predictive) < n_pred) {
-    predictive <- c(predictive,
-                    sample(genes$noise_pool, n_pred - length(predictive)))
-  }
-  if (length(prognostic) < n_prog) {
-    prognostic <- c(prognostic,
-                    sample(setdiff(genes$noise_pool, predictive),
-                           n_prog - length(prognostic)))
-  }
-  signal    <- c(prognostic, predictive)
   noise_n   <- p - length(signal)
   noise_ids <- sample(setdiff(genes$noise_pool, signal), noise_n)
   gene_ids  <- c(signal, noise_ids)                       # rows
@@ -172,30 +257,23 @@ cf_example_data <- function(n = 200L, p = 500L,
   sex  <- factor(ifelse(sexM == 1, "M", "F"), levels = c("F", "M"))
 
   # --- Outcome model -------------------------------------------------------
-  # Prognostic (mu0) and predictive (tau) signals are given comparable strength
-  # (Var(mu0) ~ Var(tau)); the treatment-effect heterogeneity is mostly
-  # gene-driven with a smaller clinical (sex) modifier. Each additive block is
-  # scaled empirically to its target variance so the moments hold for any
-  # realisation, then the noise is set from the requested SNR.
-  var_tau  <- 1.0     # target Var(tau)
-  var_mu0  <- 1.0     # 1:1 prognostic:predictive strength
-  het_frac <- 0.7     # gene share of Var(tau) (rest = sex modifier)
-  ATE      <- 1.0     # baseline effect; a minority have tau < 0
+  # Every coefficient is `effect_size` and nothing is rescaled afterwards, so
+  # the spreads are the ones `@details` states and adding signal genes adds
+  # signal instead of thinning it.
+  #
+  # All the genes of one pathway push the same way. A sign drawn per gene would
+  # set members of one pathway against each other, which is odd on its face
+  # and has a consequence: a gene-set score sums its members, so a signal whose
+  # genes point in opposite directions cancels in it and a pathway-level
+  # recipe could not see the planted effect at all. The spreads are unchanged,
+  # because the variance of a sum of independent terms does not depend on
+  # their signs.
+  tau <- ate + effect_size *
+    (rowSums(Zt[, which(is_pred), drop = FALSE]) + (sexM - 0.5))
+  mu0 <- effect_size *
+    (rowSums(Zt[, which(is_prog), drop = FALSE]) + z_age)
 
-  w_pred <- sample(c(-1, 1), n_pred, replace = TRUE)      # +/- effect direction
-  v_prog <- sample(c(-1, 1), n_prog, replace = TRUE)
-  raw_het  <- as.numeric(Zt[, which(is_pred), drop = FALSE] %*% w_pred)
-  raw_prog <- as.numeric(Zt[, which(is_prog), drop = FALSE] %*% v_prog)
-
-  het_tau <- sqrt(het_frac * var_tau / stats::var(raw_het)) * raw_het
-  delta   <- sqrt((1 - het_frac) * var_tau / 0.25)         # Var(sex term) target
-  tau <- ATE + delta * (sexM - 0.5) + het_tau
-  mu0 <- sqrt(0.3 * var_mu0) * z_age +
-    sqrt(0.7 * var_mu0 / stats::var(raw_prog)) * raw_prog
-
-  # Noise scaled to the requested SNR against the realised Var(tau).
-  sigma <- sqrt(stats::var(tau) / snr)
-  epsilon <- stats::rnorm(n, 0, sigma)
+  epsilon <- stats::rnorm(n, 0, noise_sd)
   Tr <- stats::rbinom(n, 1, 0.5)
   Y  <- mu0 + Tr * tau + epsilon
 
@@ -224,8 +302,9 @@ cf_example_data <- function(n = 200L, p = 500L,
     cf_prognostic_genes  = prognostic,
     cf_true_ate          = mean(tau),
     cf_snr               = as.numeric(stats::var(tau) / stats::var(epsilon)),
-    cf_params            = list(n = n, p = p, n_prog = n_prog,
-                                n_pred = n_pred, snr = snr, seed = seed)
+    cf_params            = list(n = n, p = p, n_prog = n_prog, n_pred = n_pred,
+                                effect_size = effect_size, ate = ate,
+                                noise_sd = noise_sd, seed = seed)
   )
   se
 }

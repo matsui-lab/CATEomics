@@ -7,15 +7,19 @@
 cf_plot_stability(stability, cor_method = NULL, ...)
 }
 \arguments{
-\item{stability}{A \code{cfomics_model_stability} object.}
+\item{stability}{A \code{cateomics_model_stability} object.}
 
 \item{cor_method}{Which stored correlation matrix to show; defaults to the
 object's primary correlation method.}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
 A ggplot object (K x K pairwise correlation of OOF tau-hat).
+
+  The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+  themes or scales to it restyles the panel, and because the fill is mapped,
+  a fill scale added afterwards replaces the one here.
 }
 \description{
 Correlation heatmap of a cf_model_stability object.
@@ -27,8 +31,11 @@ se  <- cf_example_data(n = 50, p = 40, n_prog = 8, n_pred = 4, seed = 1)
 cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
                   X_baseline = c("age", "sex"),
                   methods = c("grf", "bcf"), n_features = 25,
-                  n_burn = 10L, n_iter = 10L, n_chains = 1L,  # 1 chain keeps bcf fast
-                  propensity_score = 0.5, random_state = 1)
+                  # 1 chain keeps bcf fast
+                  params = list(bcf = list(nburn = 10L, nsim = 10L,
+                                           n_chains = 1L)),
+                  propensity_score = 0.5, eval_propensity_score = 0.5,
+                  random_state = 1)
 stab <- cf_model_stability(cmp)
 cf_plot_stability(stab)
 }

@@ -2,12 +2,12 @@
 % Please edit documentation in R/cf_attach_results.R
 \name{cf_attach_results}
 \alias{cf_attach_results}
-\title{Attach cfomics results back to SE / MAE / data.frame (E-1)}
+\title{Attach CATEomics results back to SE / MAE / data.frame}
 \usage{
 cf_attach_results(
   data,
   model,
-  what = c("all", "tau", "group", "vi", "ate"),
+  what = "all",
   groups = NULL,
   itp = NULL,
   surrogate = NULL,
@@ -20,12 +20,20 @@ cf_attach_results(
 \item{model}{\code{cf_model}.}
 
 \item{what}{Character vector subset of \code{c("all", "tau", "group",
-"vi", "ate")} (default \code{"all"}).}
+"vi")} (default \code{"all"}). \code{"all"} means everything that can
+be written from what was passed: \code{tau} always, the group when
+\code{groups} is given, the importance when \code{itp} is given and the
+object has a feature annotation. \code{"tau"} writes the out-of-fold
+\eqn{\hat\tau}, or the in-sample one when the fit has no out-of-fold
+estimate. A field named explicitly whose input is missing is an error;
+reached through \code{"all"} it is reported and skipped. \code{"vi"}
+needs a feature annotation to write to, so naming it for a data frame is
+an error as well.}
 
-\item{groups}{Optional \code{cfomics_groups} for the \code{"group"}
+\item{groups}{Optional \code{cateomics_groups} for the \code{"group"}
 field.}
 
-\item{itp}{Optional \code{cfomics_interpret} for the \code{"vi"}
+\item{itp}{Optional \code{cateomics_interpret} for the \code{"vi"}
 field (only when \code{data} is SE/MAE and feature-level write
 into rowData is requested via top-k VI markers).}
 
@@ -38,13 +46,18 @@ importance is written for \code{"vi"} (one of the surrogates in
 columns of the same name.}
 }
 \value{
-Augmented \code{data} (same class as input).
+Augmented \code{data} (same class as input). The columns written
+  are \code{cf_tau} and \code{cf_group} and, for a
+  \code{SummarizedExperiment} or \code{MultiAssayExperiment},
+  \code{cf_vi_importance} and \code{cf_vi_rank} on the feature
+  annotation. The average effect is one number for the whole fit
+  (\code{model$res$ate}), so it is not written as a column.
 }
 \description{
-Writes \code{cf_model} per-sample fields (\code{tau}, group
-assignment, ATE constant, etc.) into the colData of a
-\code{SummarizedExperiment} / \code{MultiAssayExperiment} (or
-adds columns to a data.frame).
+Writes \code{cf_model} per-sample fields (the estimated effect, the
+benefit group) into the colData of a \code{SummarizedExperiment} /
+\code{MultiAssayExperiment} (or adds columns to a data.frame), and the
+variable importance onto the feature annotation.
 }
 \examples{
 # Write the estimated individual effects back onto the SummarizedExperiment.

@@ -1,5 +1,5 @@
 .skip_if_no_pyro <- function() {
-  # CEVAE runs inside the cfomics basilisk environment.
+  # CEVAE runs inside the CATEomics basilisk environment.
   skip_if_no_cf_python()
 }
 
@@ -14,9 +14,9 @@ test_that("cf_fit with method='cevae' runs on continuous Y and hits contract", {
   Y <- 1.5 * T + 0.8 * X1 + 0.3 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "cevae",
-                num_epochs = 5L, latent_dim = 4L, hidden_dim = 16L,
-                batch_size = 50L)
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "cevae",
+          params = list(num_epochs = 5L, latent_dim = 4L, hidden_dim = 16L,
+              batch_size = 50L))
 
   expect_s3_class(fit, "cf_model")
   expect_s3_class(fit, "cf_model")
@@ -52,9 +52,9 @@ test_that("predict_cf_cevae supports newdata for all types", {
   Y <- 1.5 * T + 0.8 * X1 + 0.3 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "cevae",
-                num_epochs = 5L, latent_dim = 4L, hidden_dim = 16L,
-                batch_size = 50L)
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "cevae",
+          params = list(num_epochs = 5L, latent_dim = 4L, hidden_dim = 16L,
+              batch_size = 50L))
 
   n_new <- 15
   newdata <- data.frame(X1 = rnorm(n_new), X2 = rnorm(n_new))

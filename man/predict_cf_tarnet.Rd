@@ -12,14 +12,15 @@ predict_cf_tarnet(object, newdata = NULL, type = "all", ...)
 \item{newdata}{Optional new covariates. When \code{NULL} the cached
 training predictions are returned.}
 
-\item{type}{One of \code{"ate"}, \code{"tau"}, \code{"mu0"}, \code{"mu1"},
-\code{"summary"}.}
+\item{type}{One of \code{"all"} (the default), \code{"ate"},
+\code{"ate_ci"}, \code{"tau"}, \code{"tau_ci"}, \code{"mu0"},
+\code{"mu1"}, \code{"ps"}, \code{"summary"}.}
 
 \item{...}{Ignored.}
 }
 \value{
-Depending on `type`: the full list of predictions when
-  `type = "all"`, otherwise the requested component (a scalar ATE, a numeric
+Depending on \code{type}: the full list of predictions when
+  \code{type = "all"}, otherwise the requested component (a scalar ATE, a numeric
   vector of per-sample effects or potential outcomes, or a summary list).
 }
 \description{

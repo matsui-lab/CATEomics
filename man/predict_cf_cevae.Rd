@@ -7,7 +7,7 @@
 predict_cf_cevae(
   object,
   newdata = NULL,
-  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "summary"),
+  type = c("all", "ate", "ate_ci", "tau", "tau_ci", "mu0", "mu1", "ps", "summary"),
   ...
 )
 }
@@ -18,8 +18,9 @@ predict_cf_cevae(
 same column order/dimensionality as the training \code{X}. If
 \code{NULL}, returns in-sample estimates.}
 
-\item{type}{One of \code{"ate"}, \code{"tau"}, \code{"mu0"}, \code{"mu1"},
-\code{"summary"}.}
+\item{type}{One of \code{"all"} (the default), \code{"ate"},
+\code{"ate_ci"}, \code{"tau"}, \code{"tau_ci"}, \code{"mu0"},
+\code{"mu1"}, \code{"ps"}, \code{"summary"}.}
 
 \item{...}{Unused.}
 }
@@ -28,8 +29,9 @@ The requested prediction; see \code{type}.
 }
 \description{
 Returns in-sample estimates when \code{newdata} is \code{NULL}. Otherwise
-re-scores the trained \code{CEVAEExtended} model on \code{newdata} using
-\code{predict_y()} so that \code{y0}, \code{y1}, \code{ite}, \code{ate},
-\code{summary} and \code{samples} are all available for new samples.
+re-scores the trained model on \code{newdata} through
+\code{predict_y_with_ci_seeded()}, which returns \code{tau_hat},
+\code{mu0_hat}, \code{mu1_hat}, \code{ate} and the per-row credible
+intervals.
 }
 \keyword{internal}

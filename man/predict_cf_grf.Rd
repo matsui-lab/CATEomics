@@ -28,15 +28,16 @@ stored training-sample predictions are returned.}
 \item{...}{Ignored.}
 }
 \value{
-Depending on `type`: the full list of predictions when
-  `type = "all"`, otherwise the requested component (a scalar ATE, a numeric
+Depending on \code{type}: the full list of predictions when
+  \code{type = "all"}, otherwise the requested component (a scalar ATE, a numeric
   vector of per-sample effects or potential outcomes, or a summary list).
 }
 \description{
 \code{type = "all"} returns the flat list
-\code{$ate / $ate_ci / $tau_hat / $tau_ci / $mu0_hat / $mu1_hat}. CI on
-newdata is supported via the IJ variance estimate (Wald). The
-counterfactual potential outcomes \eqn{\hat y_0}, \eqn{\hat y_1} on
+\code{$ate / $ate_ci / $tau_hat / $tau_ci / $mu0_hat / $mu1_hat / $ps /
+$ps_type}. On newdata the per-row \code{tau_ci} comes from the IJ
+variance estimate (Wald) and \code{ate_ci} is \code{NA}. The
+counterfactual potential outcomes \eqn{\hat\mu_0}, \eqn{\hat\mu_1} on
 newdata are reconstructed from the persisted nuisance forests
 \code{forest.Y} / \code{forest.W} via the Robinson decomposition.
 }

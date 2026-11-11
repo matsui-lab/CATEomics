@@ -1,16 +1,18 @@
 """sklearn-compatible wrapper that clips ``predict_proba`` to ``[L, U]``.
 
-Supports the unified ``trim = c(L, U)`` API across PS-using methods.
+Supports the unified ``clip = c(L, U)`` API across PS-using methods.
 ``econml.dr.DRLearner`` exposes ``min_propensity`` (lower bound only) and
 econml estimators expose ``trimming_threshold`` (symmetric only), so neither
-natively supports the user-facing ``trim = c(L, U)`` asymmetric two-sided API.
+natively supports the user-facing ``clip = c(L, U)`` asymmetric two-sided API.
 We therefore wrap any sklearn-style probabilistic classifier (e.g., logistic /
-lasso / RandomForestClassifier from cfomics' learner factory) and clip both
-treated and control columns of ``predict_proba`` to ``[lower, upper]`` while
-renormalising to keep rows summing to 1.
+lasso / RandomForestClassifier from CATEomics' learner factory) and clip the
+treated column of ``predict_proba`` to ``[lower, upper]``, taking the control
+column as its complement. Clipping both and renormalising was tried and
+rejected: it moves a score that was inside the bounds (see the comment at the
+clip itself).
 
 This file is imported lazily from R via ``reticulate::import_from_path`` so it
-adds no Python load cost when ``trim`` is not in use.
+adds no Python load cost when ``clip`` is not in use.
 """
 
 import numpy as np
@@ -26,14 +28,13 @@ class ClippedPropensityModel(ClassifierMixin, BaseEstimator):
         Must implement ``fit(X, y)``, ``predict_proba(X)``, ``predict(X)``,
         and expose ``classes_`` after fitting.
     lower : float, default ``0.025``
-        Lower clip threshold (Crump 2009 / van der Laan-Rose 2011 standard).
+        Lower clip threshold.
     upper : float, default ``0.975``
         Upper clip threshold.
     """
 
     # The (ClassifierMixin, BaseEstimator) MRO order (mixin first) is what lets
-    # sklearn's tag system mark this wrapper as a classifier, so DoubleML does
-    # not emit a spurious "not a classifier" warning. The explicit
+    # sklearn's tag system mark this wrapper as a classifier. The explicit
     # `_estimator_type` is belt-and-suspenders for older sklearn.
     _estimator_type = "classifier"
 
@@ -58,16 +59,21 @@ class ClippedPropensityModel(ClassifierMixin, BaseEstimator):
 
     def predict_proba(self, X):
         proba = self.estimator_.predict_proba(X)
-        proba_clipped = np.clip(proba, self.lower, self.upper)
-        # Renormalise rows so they sum to 1.
-        row_sums = proba_clipped.sum(axis=1, keepdims=True)
-        # Guard against pathological all-zero rows (shouldn't happen after clip
-        # given lower > 0, but defensively keep them as uniform if so).
-        zero_mask = row_sums.flatten() == 0
-        if np.any(zero_mask):
-            proba_clipped[zero_mask] = 1.0 / proba_clipped.shape[1]
-            row_sums = proba_clipped.sum(axis=1, keepdims=True)
-        return proba_clipped / row_sums
+        # Clip the treated probability and let the control column follow, so
+        # the bound the caller asked for is the bound that holds. Clipping both
+        # columns and renormalising instead returns values outside [lower,
+        # upper] whenever the bounds are asymmetric: with (0.2, 0.9) a score of
+        # 0.02 came back as 0.1818.
+        proba = np.asarray(proba)
+        if proba.shape[1] < 2:
+            # A training fold with a single observed arm gives one column; the
+            # other arm then has probability 0 before clipping.
+            only = getattr(self.estimator_, "classes_", np.array([0]))[0]
+            treated_raw = np.full(proba.shape[0], 1.0 if only == 1 else 0.0)
+        else:
+            treated_raw = proba[:, 1]
+        treated = np.clip(treated_raw, self.lower, self.upper)
+        return np.column_stack([1.0 - treated, treated])
 
     def predict(self, X):
         return self.estimator_.predict(X)
@@ -95,14 +101,19 @@ class FixedPropensityModel(ClassifierMixin, BaseEstimator):
     propensity_score : float or 1d array
         If scalar, broadcast to all rows. If 1d array, length must match the
         number of rows seen in ``fit``.
+    lower, upper : float
+        Clipping bounds, applied to a supplied score exactly as they are to an
+        estimated one so that ``clip`` means the same thing either way.
     classes : tuple, default ``(0, 1)``
         Class labels reported via ``classes_``.
     """
 
     _estimator_type = "classifier"
 
-    def __init__(self, propensity_score, classes=(0, 1)):
+    def __init__(self, propensity_score, lower=0.0, upper=1.0, classes=(0, 1)):
         self.propensity_score = propensity_score
+        self.lower = lower
+        self.upper = upper
         self.classes = classes
 
     def fit(self, X, y, sample_weight=None):
@@ -136,6 +147,7 @@ class FixedPropensityModel(ClassifierMixin, BaseEstimator):
                     "vector-valued known propensity (length mismatch)."
                 )
             ps_col1 = self._ps_array_
+        ps_col1 = np.clip(ps_col1, self.lower, self.upper)
         proba = np.column_stack([1.0 - ps_col1, ps_col1])
         return proba
 
@@ -150,8 +162,8 @@ class ColumnSubsetPropensityModel(ClassifierMixin, BaseEstimator):
     The user can pass `propensity_X = c("X1", "X3")` to cf_fit / cf_compare to
     restrict PS estimation to a subset of covariates while the outcome model
     still uses the full X (DML standard practice; collider / mediator / proxy
-    hygiene on the T-side). For sklearn-based methods (aipw / drlearner /
-    xlearner) the
+    hygiene on the T-side). For the econml methods (drlearner / xlearner)
+    the
     natural way to express "fit the classifier on a column subset" is via
     `ColumnTransformer` + `Pipeline`, but that requires a multi-step glue per
     backend. This single-class wrapper achieves the same thing with no
@@ -213,13 +225,19 @@ class ColumnSubsetPropensityModel(ClassifierMixin, BaseEstimator):
         proba = self.estimator_.predict_proba(X_sub)
         if self.lower is None or self.upper is None:
             return proba
-        proba_clipped = np.clip(proba, self.lower, self.upper)
-        row_sums = proba_clipped.sum(axis=1, keepdims=True)
-        zero_mask = row_sums.flatten() == 0
-        if np.any(zero_mask):
-            proba_clipped[zero_mask] = 1.0 / proba_clipped.shape[1]
-            row_sums = proba_clipped.sum(axis=1, keepdims=True)
-        return proba_clipped / row_sums
+        # Clip the treated probability and let the control column follow, as
+        # ClippedPropensityModel does. Clipping both columns and renormalising
+        # returns values outside [lower, upper] for asymmetric bounds.
+        proba = np.asarray(proba)
+        if proba.shape[1] < 2:
+            # A training fold with a single observed arm gives one column; the
+            # other arm then has probability 0 before clipping.
+            only = getattr(self.estimator_, "classes_", np.array([0]))[0]
+            treated_raw = np.full(proba.shape[0], 1.0 if only == 1 else 0.0)
+        else:
+            treated_raw = proba[:, 1]
+        treated = np.clip(treated_raw, self.lower, self.upper)
+        return np.column_stack([1.0 - treated, treated])
 
     def predict(self, X):
         return self.estimator_.predict(self._subset(X))

@@ -9,7 +9,7 @@ test_that("cf_fit_drlearner basic execution", {
   Y <- 1.5 * T + 0.8 * X1 + 0.4 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner")
 
   expect_s3_class(fit, "cf_model")
   expect_s3_class(fit, "cf_model")
@@ -42,7 +42,7 @@ test_that("drlearner prediction on new data", {
   Y <- 1.5 * T + 0.8 * X1 + 0.4 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner")
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner")
 
   newdata <- data.frame(X1 = rnorm(10), X2 = rnorm(10))
 
@@ -60,7 +60,7 @@ test_that("drlearner y0/y1 are direct nuisance estimates (Option B)", {
   Y <- 1.5 * T + 0.8 * X1 + 0.4 * X2 + rnorm(n)
   data <- data.frame(Y = Y, T = T, X1 = X1, X2 = X2)
 
-  fit <- cf_fit(Y ~ T | X1 + X2, data = data, method = "drlearner",
+  fit <- cf_fit(Y = "Y", T = "T", X_baseline = c("X1", "X2"), data = data, method = "drlearner",
                 random_state = 0L)
 
   ite <- predict(fit, type = "tau")

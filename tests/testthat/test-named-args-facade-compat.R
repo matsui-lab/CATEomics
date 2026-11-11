@@ -28,7 +28,7 @@ library(testthat)
     data = df, method = method,
     random_state = 42L, partition = "oof", n_folds = 3L
   )
-  if (identical(method, "grf")) args$tune.parameters <- "none"
+  if (identical(method, "grf")) args$params <- list(tune.parameters = "none")
   args <- c(args, list(...))
   suppressWarnings(suppressMessages(do.call(cf_fit, args)))
 }
@@ -45,7 +45,7 @@ test_that("predict newdata works on a named-args fitted model", {
 
 test_that("cf_evaluate runs on a named-args fitted model", {
   fit <- .fit_named("grf")
-  ev <- suppressWarnings(cf_evaluate(fit, metric = "rate",
+  ev <- suppressWarnings(cf_evaluate(fit, metrics = "rate",
                                        target_quantile = 0.2))
   expect_true(is.list(ev))
   # Either flat metrics or a metrics sub-list — both shapes are accepted.
@@ -56,14 +56,14 @@ test_that("cf_evaluate runs on a named-args fitted model", {
 test_that("cf_interpret runs on a named-args fitted model", {
   fit <- .fit_named("grf")
   itp <- suppressWarnings(cf_interpret(fit, surrogate = "ridge"))
-  expect_s3_class(itp, "cfomics_interpret")
+  expect_s3_class(itp, "cateomics_interpret")
   expect_true(!is.null(itp$vi))
 })
 
 test_that("cf_rule runs on a named-args fitted model", {
   fit <- .fit_named("grf")
   rule <- suppressWarnings(cf_rule(fit, type = "threshold"))
-  expect_true(inherits(rule, "cfomics_rule") || is.list(rule))
+  expect_true(inherits(rule, "cateomics_rule") || is.list(rule))
 })
 
 test_that("propensity_X is preserved on $meta after K-fold cross-fit", {

@@ -14,14 +14,14 @@ set.seed(123)
 }
 
 
-# .cfomics_clean_oof_tau_matrix --------------------------------------------
+# .cateomics_clean_oof_tau_matrix --------------------------------------------
 
-test_that(".cfomics_clean_oof_tau_matrix drops failed methods + incomplete rows", {
+test_that(".cateomics_clean_oof_tau_matrix drops failed methods + incomplete rows", {
   mat <- .make_test_oof_tau_matrix(n = 30L, K = 5L, n_failed = 2L)
   # Introduce an NA in 1 row of a surviving column to test row drop.
   mat[5L, 3L] <- NA_real_
 
-  out <- .cfomics_clean_oof_tau_matrix(mat)
+  out <- .cateomics_clean_oof_tau_matrix(mat)
 
   expect_equal(out$status, "ok")
   expect_equal(length(out$kept_methods), 3L)
@@ -33,28 +33,28 @@ test_that(".cfomics_clean_oof_tau_matrix drops failed methods + incomplete rows"
   expect_true(all(stats::complete.cases(out$mat)))
 })
 
-test_that(".cfomics_clean_oof_tau_matrix returns no_input for NULL / wrong type", {
-  out1 <- .cfomics_clean_oof_tau_matrix(NULL)
+test_that(".cateomics_clean_oof_tau_matrix returns no_input for NULL / wrong type", {
+  out1 <- .cateomics_clean_oof_tau_matrix(NULL)
   expect_equal(out1$status, "no_input")
   expect_null(out1$mat)
 
-  out2 <- .cfomics_clean_oof_tau_matrix(c(1, 2, 3))
+  out2 <- .cateomics_clean_oof_tau_matrix(c(1, 2, 3))
   expect_equal(out2$status, "no_input")
 })
 
-test_that(".cfomics_clean_oof_tau_matrix returns no_columns when all methods fail", {
+test_that(".cateomics_clean_oof_tau_matrix returns no_columns when all methods fail", {
   mat <- .make_test_oof_tau_matrix(n = 20L, K = 3L, n_failed = 3L)
-  out <- .cfomics_clean_oof_tau_matrix(mat)
+  out <- .cateomics_clean_oof_tau_matrix(mat)
   expect_equal(out$status, "no_columns")
   expect_null(out$mat)
 })
 
 
-# .cfomics_tau_correlation_knee --------------------------------------------
+# .cateomics_tau_correlation_knee --------------------------------------------
 
-test_that(".cfomics_tau_correlation_knee returns expected list shape", {
+test_that(".cateomics_tau_correlation_knee returns expected list shape", {
   mat <- .make_test_oof_tau_matrix(n = 80L, K = 5L)
-  out <- .cfomics_tau_correlation_knee(mat, cor_method = "spearman")
+  out <- .cateomics_tau_correlation_knee(mat, cor_method = "spearman")
 
   expect_true(is.matrix(out$cor_matrix))
   expect_equal(dim(out$cor_matrix), c(5L, 5L))
@@ -68,34 +68,52 @@ test_that(".cfomics_tau_correlation_knee returns expected list shape", {
   expect_equal(out$cor_method, "spearman")
 })
 
-test_that(".cfomics_tau_correlation_knee handles K < 2 gracefully", {
+test_that(".cateomics_tau_correlation_knee handles K < 2 gracefully", {
   mat <- matrix(rnorm(20), nrow = 20L, ncol = 1L)
   colnames(mat) <- "m1"
-  out <- .cfomics_tau_correlation_knee(mat)
+  out <- .cateomics_tau_correlation_knee(mat)
   expect_null(out$cor_matrix)
   expect_null(out$ordering)
   expect_true(is.na(out$knee_k))
 })
 
-test_that(".cfomics_tau_correlation_knee supports all 3 cor methods", {
+test_that(".cateomics_tau_correlation_knee supports all 3 cor methods", {
   mat <- .make_test_oof_tau_matrix(n = 40L, K = 3L)
   for (cm in c("kendall", "spearman", "pearson")) {
-    out <- .cfomics_tau_correlation_knee(mat, cor_method = cm)
+    out <- .cateomics_tau_correlation_knee(mat, cor_method = cm)
     expect_equal(out$cor_method, cm)
     expect_equal(dim(out$cor_matrix), c(3L, 3L))
   }
 })
 
-test_that(".cfomics_locate_knee respects min_knee bound", {
+test_that(".cateomics_locate_knee respects min_knee bound", {
   # Sharp drop at position 2.
   x <- c(0.9, 0.85, 0.1, 0.05, 0.02)
-  expect_equal(.cfomics_locate_knee(x, min_knee = 2L), 2L)
+  expect_equal(.cateomics_locate_knee(x, min_knee = 2L), 2L)
 
   # Largest drop at position 4 (penultimate to last).
   y <- c(0.9, 0.88, 0.85, 0.8, 0.2)
-  expect_equal(.cfomics_locate_knee(y, min_knee = 2L), 4L)
+  expect_equal(.cateomics_locate_knee(y, min_knee = 2L), 4L)
 
   # When length <= min_knee, return length.
   z <- c(0.9, 0.8)
-  expect_equal(.cfomics_locate_knee(z, min_knee = 2L), 2L)
+  expect_equal(.cateomics_locate_knee(z, min_knee = 2L), 2L)
+})
+
+
+# cor_method selects the correlation, it is not just echoed back ----------
+
+test_that("the requested correlation method is the one that is computed", {
+  set.seed(4)
+  a <- rnorm(100)
+  # An exponential column is monotone in `a` but not linear, so Pearson and
+  # Spearman must disagree. Computing Pearson whatever was asked for would
+  # make every stored matrix identical.
+  mat <- cbind(m1 = a, m2 = exp(a), m3 = a + rnorm(100, sd = 0.3))
+
+  out <- .cateomics_tau_correlation_knee(mat, cor_method = "pearson")
+  out_s <- .cateomics_tau_correlation_knee(mat, cor_method = "spearman")
+  expect_equal(out$cor_matrix[1, 2], stats::cor(a, exp(a)), tolerance = 1e-10)
+  expect_equal(out_s$cor_matrix[1, 2], 1, tolerance = 1e-10)
+  expect_false(isTRUE(all.equal(out$cor_matrix[1, 2], out_s$cor_matrix[1, 2])))
 })

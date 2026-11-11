@@ -1,0 +1,464 @@
+---
+title: "Model selection and ensemble learning in heterogeneous treatment
+  effect estimation from high-dimensional omics data"
+author: "Takeru Furuta, Yusuke Matsui"
+package: CATEomics
+bibliography: CATEomics.bib
+output:
+  BiocStyle::html_document:
+    toc_float: true
+vignette: >
+  %\VignetteIndexEntry{Model selection and ensemble learning in heterogeneous treatment effect estimation from high-dimensional omics data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>", crop = NULL,
+  fig.width = 6, fig.height = 4
+)
+```
+
+# Introduction
+
+`CATEomics` estimates conditional average treatment effects (CATE) for
+high-dimensional omics data (many genes, few samples). Many CATE estimators
+exist and no single one is reliably best in advance: the winner depends on the
+data. `CATEomics` therefore provides one interface to **compare** estimators on
+proxy losses, **select** one, or **combine** them into an ensemble, and to
+carry the resulting individual effects into standard Bioconductor analyses.
+
+This vignette walks through that workflow on a small simulated
+`SummarizedExperiment`. The data are synthetic and used only to make the steps
+runnable end to end.
+
+```{r install, eval = FALSE}
+if (!requireNamespace("remotes", quietly = TRUE))
+    install.packages("remotes")
+remotes::install_github("matsui-lab/CATEomics")
+```
+
+```{r libs, message = FALSE}
+library(CATEomics)
+library(SummarizedExperiment)
+```
+
+The Python-backed estimators (the meta-learners and the neural methods) run
+in a Python environment that `basilisk` [@lun2022] provisions on first use, which takes
+a few minutes the first time and nothing afterwards. The R packages the default
+estimators and the scoring need are hard dependencies. A few features read
+packages from `Suggests` --- the `bcf` method, batch correction, gene-set
+scoring and the SHAP plots --- and so do the downstream recipes at the end.
+
+# Example data
+
+`cf_example_data()` returns a `SummarizedExperiment` of raw RNA-seq counts with
+a randomised treatment, a continuous outcome, two clinical covariates
+(`age`, `sex`) and a planted heterogeneous treatment effect. The true
+individual effect is stored in `colData` and the signal genes are flagged in
+`rowData`. The gene names are drawn from the MSigDB hallmark collection
+[@liberzon2015].
+
+The default `ate = 0` puts the average effect at zero, so about half the
+samples are harmed by treatment and which patients benefit --- not the average
+--- is the interesting quantity here. Every constant of the generating process
+is an argument (`effect_size`, `ate`, `noise_sd`, and the number of signal
+genes), and `?cf_example_data` gives the formulas.
+
+```{r data}
+se <- cf_example_data(n = 150, p = 600, seed = 1)
+se
+colData(se)[1:3, ]
+```
+
+# A single estimator
+
+`cf_fit()` fits one method. The ten methods and where each one is computed:
+
+| `method` | estimator comes from | needs Python |
+|---|---|---|
+| `grf` | `grf` | no |
+| `bcf` | `bcf` | no |
+| `slearner` | CATEomics itself | yes |
+| `tlearner` | `econml` | yes |
+| `xlearner` | `econml` | yes |
+| `drlearner` | `econml` | yes |
+| `cevae` | `pyro` | yes |
+| `ganite` | CATEomics itself | yes |
+| `tarnet` | `catenets` | yes |
+| `dragonnet` | `catenets` | yes |
+
+The two CATEomics implementations are written with `scikit-learn` and `torch`
+respectively. Each method has its own help page, which carries the reference for the
+estimator it implements and the hyperparameters it accepts (`?cf_fit_grf`,
+`?cf_fit_xlearner`, and so on).
+
+Only the four meta / DR learners (`slearner`, `tlearner`, `xlearner`,
+`drlearner`) take a pluggable base learner for the outcome; `grf` and the
+neural methods estimate their own nuisance functions internally, and `bcf`
+fits the outcome with its own BART but takes a learner for the propensity
+(`model_propensity`, default `logistic`). The seven base
+learners are `linear` / `logistic`, `lasso` / `ridge` / `elastic_net`, `rf`
+and `xgboost`. `model_outcome` picks the outcome model and `model_final` the
+second-stage CATE model. Only `xlearner` and `drlearner` take `model_final`:
+`xlearner` falls back to `model_outcome` when it is not given, `drlearner`
+does not and uses `ridge`.
+
+The example below uses `grf` [@athey2019], which is R-native and needs no
+Python. The result carries the average effect and one estimate per sample.
+
+CATEomics treats **larger values of `Y` as the better outcome**, so a positive
+`tau_hat` is a treatment that helps and the functions downstream -- benefit
+groups, the treatment rule, the evaluation metrics and the plots -- all read
+the largest `tau_hat` as the most benefit. If smaller values of your outcome
+are better, such as a severity score, analyse the negated outcome (`-Y`, or
+`1 - Y` for a binary one).
+
+`X_baseline` names the clinical covariates in `colData`; the omics block comes
+from the assay. `omics = "all"`, the default for a `SummarizedExperiment`,
+takes the whole assay; a character vector names features instead, and
+`"none"` leaves the omics out. When a `SummarizedExperiment` has several
+assays, name the one to use: assays are not combined. A
+`MultiAssayExperiment` takes every experiment `omics` points at, concatenates
+them and prefixes each column with its experiment's name (`rnaseq_GENE1`); a
+named list such as `list(rnaseq = "all", methyl = c("cg001"))` selects per
+experiment. `?cf_fit` has the full grammar, including what a `data.frame`
+accepts.
+
+What reaches the design matrix is then filtered. `feature_method` defaults to
+`"variance"`, which keeps the most variable columns; the alternatives are
+`"none"` (no filtering), `"pca"` (principal components) and `"pathway"`
+(gene-set scores). `n_features` defaults to 100 (50 per layer for a
+`MultiAssayExperiment`) and sets how many columns, components or gene sets are
+kept. The calls below pass `n_features = 300`.
+
+```{r grf}
+fit <- cf_fit(data = se, Y = "outcome", T = "treatment",
+              X_baseline = c("age", "sex"), omics = "all",
+              method = "grf", n_features = 300)
+fit
+head(predict(fit, type = "tau"))
+```
+
+# Comparing estimators
+
+To put several estimators on the same footing, fit them with `cf_compare()`.
+It uses one K-fold split for all of them --- each method fits on K-1 folds and
+predicts the fold it did not see --- and scores those out-of-fold estimates on
+proxy CATE losses, where a lower loss is better.
+
+`metric` says which losses to compute and defaults to all three: `r_loss`
+[@nie2021], `dr_loss` [@kennedy2023; @mahajan2024] and `factual_loss`. The
+`rank` column is taken on the first of them, so to rank on another loss, put
+that one first. To leave the scoreboard as it is and choose on a different
+loss, name it in `cf_select()` instead.
+
+The losses are computed from nuisance models fitted separately from the
+candidates. Since the preprocessing, the split and those nuisance models are
+the same for every candidate, differences in loss reflect differences in the
+candidates' estimates. The nuisance models come from a Super Learner by
+default (`eval_nuisance = "super_learner"` [@vanderlaan2007]).
+
+The propensity is estimated by default, from the clinical covariates. To
+estimate it from particular variables only, name them in `propensity_X`. When
+the assignment probability is known by design, pass it instead:
+`propensity_score` gives it to the estimators and `eval_propensity_score` to
+the scoring. This is a randomised trial, so both are `0.5`.
+
+```{r compare}
+methods <- c("grf", "tlearner", "xlearner")
+cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
+                  X_baseline = c("age", "sex"),
+                  methods = methods,
+                  n_features = 300, model_outcome = "lasso",
+                  propensity_score = 0.5, eval_propensity_score = 0.5,
+                  random_state = 1)
+cmp
+```
+
+`model_outcome` and `propensity_score` are offered to every candidate, and
+not every method takes them: `grf` estimates its outcome inside its own
+forest, and `tlearner` uses no propensity score. A candidate a setting did
+not reach is named, so a value that went nowhere is not read as part of the
+fit.
+
+The `between_fold_share` column is the share of the variance of the
+out-of-fold effects that the fold assignment explains. Near 0 the spread is
+between individuals; near 1 the method returned close to one value per fold,
+and its ranking of individuals carries little. By default it prints only the
+loss the rank was taken on; `print(cmp, full = TRUE)` also shows the other two
+losses, their intervals and the squared scores.
+
+The scoreboard answers one question --- which of these methods --- and looking
+at it raises the next ones.
+
+## Trying several base learners
+
+A meta learner [@kunzel2019b] or a DR learner [@kennedy2023] fits its outcome
+model with the learner `model_outcome` names. The second-stage CATE model is `model_final`, and when that is not
+given, `xlearner` follows `model_outcome` while `drlearner` does not and uses
+`ridge`.
+
+The comparison above named one learner and ran it. **To try several instead,
+pass `base_learners`**: each meta / DR learner comes back as one row per base
+learner, named `xlearner_rf` and so on. Under `base_learners` the outcome
+model and the final model are always the same estimator. `grf`, `bcf` and the
+neural methods build their own nuisance models, so there is nothing to swap
+and they stay on one row.
+
+```{r compare-base, eval = FALSE}
+cmp_grid <- cf_compare(data = se, Y = "outcome", T = "treatment",
+                       X_baseline = c("age", "sex"),
+                       methods = c("grf", "xlearner"),
+                       base_learners = c("lasso", "rf"),
+                       n_features = 300,
+                       propensity_score = 0.5, eval_propensity_score = 0.5,
+                       random_state = 1)
+```
+
+## Setting the hyperparameters
+
+**Where you write a block in `params` decides what it reaches.** Written under
+a candidate's label (`xlearner_rf`) it reaches that candidate; written under a
+method name (`xlearner`) it reaches every candidate made from that method.
+When a candidate has both, only the label's block is used: the two are not
+merged.
+
+A method's own hyperparameters go in flat (`grf = list(num.trees = )`), and a
+base learner's go in the slot that learner fills (`outcome` and `final`). A
+name the method does not take is an error rather than a quiet default, and
+anything that has to be a whole number is written `10L`, since the Python
+libraries check the type. The last line of the print names what each candidate
+resolved to, so the losses and the settings are read off the same screen; a
+long line is cut, and `cmp$metadata$params` holds all of it.
+
+```{r compare-params}
+cmp_tuned <- cf_compare(
+  data = se, Y = "outcome", T = "treatment", X_baseline = c("age", "sex"),
+  methods = c("grf", "xlearner"), base_learners = c("lasso", "rf"),
+  n_features = 300, propensity_score = 0.5, eval_propensity_score = 0.5,
+  random_state = 1,
+  params = list(
+    grf            = list(num.trees = 4000),
+    xlearner_lasso = list(outcome = list(cv = 10L),
+                          final   = list(cv = 10L)),
+    xlearner_rf    = list(outcome = list(n_estimators = 300L, max_depth = 4L),
+                          final   = list(n_estimators = 300L, max_depth = 4L))))
+cmp_tuned
+```
+
+## Comparing candidates you configure yourself
+
+Sometimes the comparison is not between methods but between settings --- one
+causal forest grown shallow against the same forest grown deep --- or between
+slots: the same outcome model with a different second stage. **`params` only
+configures candidates; it cannot add any**, and the candidates `base_learners`
+makes have the same estimator in both slots. `configs` is the form that sets
+each candidate on its own.
+
+**`configs` writes the candidates out and lets you name them.** Those names
+are what the scoreboard, `cf_select()`, `cf_ensemble()` and the plots call
+them from then on. The settings are written per candidate, so there is no key
+deciding what a block reaches: a candidate's `params` is its own method's
+block.
+
+```{r compare-configs}
+cmp_cfg <- cf_compare(
+  data = se, Y = "outcome", T = "treatment", X_baseline = c("age", "sex"),
+  n_features = 300, propensity_score = 0.5, eval_propensity_score = 0.5,
+  random_state = 1,
+  configs = list(
+    grf_shallow    = list(method = "grf",
+                          params = list(num.trees = 500,  min.node.size = 15)),
+    grf_deep       = list(method = "grf",
+                          params = list(num.trees = 4000, min.node.size = 1)),
+    xlearner_lasso = list(method = "xlearner", model_outcome = "lasso",
+                          model_final = "lasso"),
+    xlearner_ridge = list(method = "xlearner", model_outcome = "lasso",
+                          model_final = "ridge")))
+cmp_cfg
+```
+
+The first two rows are the same method under different settings; the last two
+share an outcome model and differ only in the second stage.
+
+
+# How much do methods agree?
+
+`cf_model_stability()` reports how much the methods order the patients the
+same way: the correlation between every pair of per-patient estimates, the
+range those pairwise values span, and each method's mean correlation with the
+rest. A high value says the methods agree, not that any of them is right.
+
+```{r stability}
+cf_model_stability(cmp)
+```
+
+# Selecting or combining
+
+`cf_select()` returns the method with the lowest loss on the scoreboard
+`cf_compare()` produced. `cf_ensemble()` instead combines the per-patient
+effects across methods, with one of five weighting rules: `mean` (equal
+weights), `softmax` (weights decreasing in the loss), `r_stacking` and
+`dr_stacking` (weights that minimise the R-loss or the DR-loss
+[@nie2021; @hanwu2022]) and `cba` (a correlation-based choice of a sub-group
+of methods, averaged with equal weights). `r_stacking`, used here, solves
+non-negative weights and can leave a method at zero.
+
+```{r select-ensemble}
+sel <- cf_select(cmp)
+sel$selection_stats$selected_method
+
+ens <- cf_ensemble(cmp, method = "r_stacking")
+ens
+```
+
+# Evaluating a chosen model
+
+Individual effects are never observed, but a per-patient pseudo-outcome that
+equals the true CATE on average can be built from the observed outcomes, and
+`cf_evaluate()` scores the estimates against it. The rank-weighted average
+treatment effect family (RATE: the targeting operator characteristic TOC at a
+given treated fraction and its average AUTOC; @yadlowsky2025) and the sorted
+group average treatment effects (GATES; @chernozhukov2025) average the
+pseudo-outcome within groups of patients ranked by the estimates, and so test
+whether patients with larger estimates really have larger effects. The best
+linear predictor (BLP; @chernozhukov2025) regresses the pseudo-outcome on the
+estimates: a slope of 1 says the estimates are on the right scale, a slope of
+0 says there is no relationship to detect. `cf_evaluate()` reuses the
+evaluation nuisance the comparison already fitted, so the score stays the one
+the scoreboard was built on.
+
+```{r evaluate}
+winner <- cmp$models[[sel$selection_stats$selected_method]]
+ev <- cf_evaluate(winner)
+ev
+```
+
+`cf_plot_evaluate()` draws any of the three: the TOC curve, the sorted group
+effects, or the BLP calibration.
+
+```{r plot-rate, fig.cap = "TOC curve of the selected model."}
+cf_plot_evaluate(ev, type = "rate")
+```
+
+# Which genes drive the effect?
+
+`cf_interpret()` distils a fitted model (or the ensemble) into a surrogate
+SHAP explanation [@lundberg2017]: an importance and a direction per gene. Two
+surrogates are fitted, a ridge regression and a gradient-boosted tree
+(`"ridge"` and `"xgb"`), and each reports a `fidelity`: the held-out $R^2$
+of that surrogate on the estimated effect. We use the ensemble effect here.
+
+```{r interpret}
+itp <- cf_interpret(ens)
+# `vi` is keyed by surrogate; each holds a per-gene importance/direction table.
+itp$vi$ridge$fidelity
+head(itp$vi$ridge$features)
+```
+
+# Benefit groups and a treatment rule
+
+`cf_benefit_groups()` splits patients into high- and low-benefit groups from
+the (out-of-fold) estimated effects.
+
+```{r groups}
+grp <- cf_benefit_groups(ens)
+grp
+```
+
+`cf_rule()` turns the estimates into a treat / do-not-treat rule and estimates
+its **policy value**: the mean outcome that would be observed if patients were
+treated according to the rule [@athey2021]. On its own that number is hard to
+read, so it is reported against three fixed policies --- treating everyone,
+treating no one, and treating the same number of patients at random. The
+comparison with the random policy of the same budget is the one that isolates
+what the rule built from the estimates adds: it holds the number treated fixed
+and changes only who is chosen.
+
+```{r rule}
+rule <- cf_rule(ens, type = "threshold", threshold = 0, random_state = 1)
+rule
+```
+
+Sweeping the threshold with `grid = TRUE` gives the policy value as a function
+of the treated fraction, which `cf_plot_policy_curve()` draws against the
+same-budget random baseline.
+
+```{r plot-policy, fig.cap = "Policy value against the treated fraction, with the same-budget random baseline (dashed)."}
+rule_grid <- cf_rule(ens, type = "threshold", grid = TRUE, random_state = 1)
+cf_plot_policy_curve(rule_grid)
+```
+
+# Connecting to Bioconductor: a biology-bridge recipe
+
+The workflow's output lives naturally on the `SummarizedExperiment`. Write the
+estimated effect and benefit group back with `cf_attach_results()`, then use
+standard Bioconductor tools [@huber2015] to describe the biology of the
+benefit groups.
+
+```{r attach}
+se <- cf_attach_results(se, ens, what = c("tau", "group"), groups = grp)
+colData(se)[1:3, c("cf_tau", "cf_group")]
+```
+
+**Differential expression between benefit groups** with `limma` [@ritchie2015],
+its `voom` weights [@law2014] and `edgeR` [@chen2025; @robinson2010]:
+
+```{r deg, eval = requireNamespace("limma", quietly = TRUE) && requireNamespace("edgeR", quietly = TRUE)}
+library(edgeR); library(limma)
+grp_f  <- factor(colData(se)$cf_group)
+dge    <- DGEList(assay(se, "counts"))
+dge    <- dge[filterByExpr(dge, group = grp_f), , keep.lib.sizes = FALSE]
+dge    <- normLibSizes(dge)
+design <- model.matrix(~ grp_f)
+efit   <- eBayes(lmFit(voom(dge, design), design))
+topTable(efit, coef = 2, number = 5)[, c("logFC", "adj.P.Val")]
+```
+
+**Pathway activity related to the estimated benefit**: `GSVA`
+[@hanzelmann2013] scores each hallmark gene set per sample with ssGSEA
+[@barbie2009], and the recipe then examines the correlation between those
+scores and the individual effect (`cf_tau`):
+
+```{r gsva, eval = requireNamespace("GSVA", quietly = TRUE) && requireNamespace("msigdbr", quietly = TRUE)}
+library(GSVA); library(msigdbr)
+h    <- msigdbr(species = "Homo sapiens", collection = "H")
+sets <- split(h$gene_symbol, h$gs_name)
+logcpm <- edgeR::cpm(assay(se, "counts"), log = TRUE)
+scores <- gsva(ssgseaParam(logcpm, sets), verbose = FALSE)
+tau    <- colData(se)$cf_tau
+cors   <- sort(apply(scores, 1, cor, tau, method = "spearman"), decreasing = TRUE)
+head(cors, 3)
+```
+
+These descriptions are exploratory: the groups and scores derive from the
+estimated effect, so treat the associations as hypothesis-generating.
+
+# The rest of the API
+
+The functions above are the path through the workflow. Two more analysis
+functions and the remaining plots are not used here:
+
+| function | what it does |
+|---|---|
+| `cf_aggregate_vi()` | Runs `cf_interpret()` on every candidate in a comparison and merges their per-gene importance rankings into one consensus list by robust rank aggregation. |
+| `cf_diagnostics()` | Reports the assumptions behind the estimates: the propensity distribution and how many values the clipping moved, the standardised mean differences after preprocessing, the covariate distributions by arm, and the E-value for unmeasured confounding. |
+
+| plot | what it draws |
+|---|---|
+| `cf_plot_compare()` | The scoreboard as ranked bars for one loss. |
+| `cf_plot_stability()` | The pairwise correlation matrix from `cf_model_stability()`. |
+| `cf_plot_cate()` | The distribution of the per-patient effects of one fit, with the average effect marked. |
+| `cf_plot_interpret()` | The SHAP output of `cf_interpret()`: importance bars, a beeswarm, or the dependence on one gene. |
+| `cf_plot_rule()` | The policy tree of `cf_rule(type = "tree")`, with each leaf labelled by what it does. |
+| `cf_plot_diagnostics()` | Three views of `cf_diagnostics()`: the propensity overlap, the standardised mean differences, and one covariate by arm. |
+
+# Session information
+
+```{r session}
+sessionInfo()
+```
+
+# References

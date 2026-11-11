@@ -14,7 +14,7 @@ cf_diagnostics(
 )
 }
 \arguments{
-\item{model}{A fitted \code{cf_model} / \code{cfomics_result}.}
+\item{model}{A fitted \code{cf_model}.}
 
 \item{variables}{Optional character vector of covariate names for the
 requested-variable overlap view. Must be columns of the model's
@@ -23,43 +23,94 @@ preprocessed \code{X}. \code{NULL} (default) skips that view.}
 \item{top_k}{Integer; how many covariates to keep in the SMD Love view
 (ranked by \eqn{|SMD|}, default \code{20}).}
 
-\item{smd_threshold}{Numeric; \eqn{|SMD|} imbalance reference line
-(default \code{0.1}).}
+\item{smd_threshold}{Numeric; the \eqn{|SMD|} reference line drawn on the
+balance plot (default \code{0.1}). It is a reference, not a verdict: the
+object reports the distribution of \eqn{|SMD|} and labels no covariate
+balanced or unbalanced.}
 
-\item{evalue_alpha}{Numeric; significance level for the CI-based E-value
-(default \code{0.05}); retained for interface stability.}
+\item{evalue_alpha}{Numeric in (0, 1); significance level for the CI-based
+E-value (default \code{0.05}). The stored 95\% interval is rescaled to
+this level, each half-width separately, which keeps an asymmetric
+interval asymmetric and reproduces the stored bounds at 0.05.}
 
-\item{...}{Ignored.}
+\item{...}{Not used; naming an unknown argument is an error.}
 }
 \value{
-An object of class \code{c("cfomics_diagnostics", "list")} with
-  elements \code{overlap}, \code{smd}, \code{variable_overlap} (or
-  \code{NULL}), \code{evalue}, and \code{metadata}.
+An object of class \code{c("cateomics_diagnostics", "list")} with
+  elements \code{overlap} (\code{NULL} when the method estimates no
+  propensity), \code{smd}, \code{variable_overlap} (or \code{NULL}),
+  \code{evalue}, and \code{metadata}.
+
+  \code{overlap$overlap_region} is the intersection of the two arms'
+  propensity ranges: its \code{lower} is the larger of the two minima and
+  its \code{upper} the smaller of the two maxima, so outside it one arm
+  has no observations at that propensity. \code{support_fraction} is the
+  share of rows inside it, and is \code{0} exactly when the two ranges do
+  not meet.
+
+  \code{smd} is a data frame of \code{variable}, \code{smd} and
+  \code{abs_smd} for the top-\code{top_k} covariates, carrying the
+  \code{median}, \code{p90}, \code{max} and \code{n_total} of
+  \eqn{|SMD|} over all of them as attributes.
+
+  \code{evalue} carries \code{available}, and when that is \code{TRUE}:
+  \code{evalue_point} and \code{evalue_ci} (the E-value of the point
+  estimate and of the confidence limit nearer the null; the second is
+  \code{1} when the interval holds the null and \code{NA} when the fit
+  carries no interval for the average effect, which is the case when none
+  was asked for), \code{rr_point} and \code{rr_ci} (the risk ratios they
+  are computed from), \code{ate} and \code{ci} (the effect and the
+  interval that were converted, the interval rescaled to
+  \code{evalue_alpha}), \code{sd_y} and \code{sd_basis} (the spread the
+  effect was divided by, and which spread that is), and \code{ci_basis}
+  (what the interval contributed, or why it contributed nothing).
 }
 \description{
-\code{cf_diagnostics()} is the single, on-demand diagnostic entry point
-for cfomics. It is a \emph{result-interpretation aid} run \emph{after}
-fitting, not a pre-flight gate. It reports four complementary views of
-the assumptions behind a fitted model:
+\code{cf_diagnostics()} runs on a fitted model and reports four views of
+the assumptions behind it:
 
 \enumerate{
   \item \strong{Propensity-score overlap} -- the treated/control
-    propensity-score distributions and their common-support region
-    (positivity / overlap).
+    propensity-score distributions, their common-support region
+    (positivity / overlap), and how many observations sit at the
+    \code{clip} bounds. The scores are the ones the fitted model used and
+    \code{$overlap$ps_type} records where they come from; an ensemble has
+    no propensity of its own, so it reports the shared evaluation
+    nuisance (\code{ps_type = "evaluation nuisance"}, floor 1e-4). Methods that
+    estimate no propensity (slearner, tlearner, tarnet, dragonnet, cevae,
+    ganite), and a fit whose propensity cannot be read back, get
+    \code{$overlap = NULL} and a message.
   \item \strong{Covariate balance} -- standardized mean differences
     (SMD) between treatment groups on the preprocessed covariates,
-    ranked, top-\code{top_k} (a Love-plot view). In \eqn{n \ll p} omics
-    the propensity model cannot absorb every feature, so residual
-    imbalance is the honest thing to surface.
+    ranked, top-\code{top_k} (a Love-plot view). How to read it is under
+    Details.
   \item \strong{Requested-variable overlap} -- for a user-supplied set
     of \code{variables}, the treated/control distributions on the scale
     the model actually saw (preprocessed).
   \item \strong{E-value} -- VanderWeele & Ding (2017) sensitivity of the
-    ATE to unmeasured confounding.
+    ATE to unmeasured confounding. The outcome here is continuous, so the
+    average effect is first standardised into \eqn{d = |ATE| / s} and
+    turned into an approximate risk ratio with \eqn{RR = \exp(0.91 d)};
+    \eqn{s} is the pooled within-arm standard deviation of the observed
+    outcome, which is the spread that conversion is defined against. The
+    quantity actually used is reported as \code{sd_basis}, because a
+    treatment arm with fewer than two usable rows leaves only the
+    whole-sample standard deviation. The interval contributes a second
+    E-value, taken at the confidence limit nearer the null; an interval
+    that holds the null gives \code{1}, and a fit that carries no interval
+    for the average effect gives \code{NA}. \code{ci_basis} says which of
+    the three it is.
 }
-
-It provides a single entry point for propensity overlap, covariate
-balance, requested-variable overlap, and the E-value in one call.
+}
+\details{
+An SMD is the between-arm difference in means over the pooled within-arm
+standard deviation: how far apart the two arms sit on that covariate. Where
+it is large, one arm thins out at one end of that covariate's range, and
+\eqn{\mu_0} / \eqn{\mu_1} at those values come from the fitted form rather
+than from rows of that arm nearby. The view covers the covariates in the
+model's preprocessed \code{X} -- the ones passed as \code{X_baseline} /
+\code{omics}; a variable that was not passed cannot appear here. The
+reported quantiles are taken over every covariate, not only the rows shown.
 }
 \examples{
 # Post-fit assumption checks on a fast R-native causal forest.
@@ -70,6 +121,13 @@ cf_diagnostics(fit, variables = "age")
 
 }
 \references{
-VanderWeele TJ, Ding P (2017). Sensitivity Analysis in Observational
-Research: Introducing the E-Value. \emph{Ann Intern Med} 167(4):268-274.
+VanderWeele TJ, Ding P (2017) Sensitivity Analysis in Observational
+Research: Introducing the E-Value, \emph{Ann Intern Med} 167(4):268-274
+(the E-value).
+
+Chinn S (2000) A simple method for converting an odds ratio to effect size
+for use in meta-analysis, \emph{Stat Med} 19(22):3127-3131, and
+VanderWeele TJ (2017) On a square-root transformation of the odds ratio for
+a common outcome, \emph{Epidemiology} 28(6):e58-e60 (together they give the
+\code{RR ~ exp(0.91 d)} conversion used for a continuous outcome).
 }

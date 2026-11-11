@@ -1,10 +1,12 @@
-#' Plot helpers for cfomics objects
+#' Plot helpers for CATEomics objects
 #'
 #' ggplot2-based plot helpers for the analysis objects
-#' (\code{cfomics_compare}, \code{cfomics_evaluate}, \code{cfomics_rule_grid},
-#' \code{cfomics_interpret}, \code{cfomics_model_stability}). Each helper
-#' extracts a small data.frame and builds the plot in a clean environment so
-#' the returned ggplot never captures the (potentially large) source object.
+#' (\code{cf_model}, \code{cateomics_compare}, \code{cateomics_evaluate},
+#' \code{cateomics_diagnostics}, \code{cateomics_rule},
+#' \code{cateomics_rule_grid}, \code{cateomics_interpret},
+#' \code{cateomics_model_stability}). Each helper extracts a small data.frame
+#' and builds the plot in a frame that holds only that, so the returned
+#' ggplot does not capture the source object.
 #'
 #' @return This is an overview page for the \code{cf_plot_*} family; it does not
 #'   define a function and has no return value. Each individual \code{cf_plot_*}
@@ -15,6 +17,28 @@ NULL
 # Okabe-Ito colour-blind-safe qualitative palette.
 .CF_OKABE_ITO <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7",
                    "#E69F00", "#56B4E9", "#F0E442", "#999999")
+
+# The views that colour by feature value carry shapviz's upright colour bar,
+# which the family's legend position would lay on its side and leave no room
+# for the panel. Those keep the bar where shapviz puts it.
+.CF_SHAP_COLOUR_BAR <- ggplot2::theme(legend.position = "right")
+
+#' The two treatment arms, wherever they are drawn together.
+#'
+#' Okabe-Ito green and purple: both are in the colour-blind-safe palette the
+#' rest of the family uses, and where the two densities overlap the blend is
+#' neutral instead of taking one arm's colour or turning muddy.
+#' @keywords internal
+#' @noRd
+.CF_ARM_COLOURS <- c(Control = "#009E73", Treated = "#CC79A7")
+
+#' @keywords internal
+#' @noRd
+.CF_ARM_FILL <- ggplot2::scale_fill_manual(values = .CF_ARM_COLOURS)
+
+#' @keywords internal
+#' @noRd
+.CF_ARM_COLOUR <- ggplot2::scale_colour_manual(values = .CF_ARM_COLOURS)
 
 #' Shared minimal theme.
 #' @keywords internal
@@ -33,7 +57,7 @@ NULL
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     rlang::abort(
       sprintf("%s requires ggplot2 (Suggests). install.packages('ggplot2').", fn),
-      class = "cfomics_optional_dependency_missing"
+      class = "cateomics_optional_dependency_missing"
     )
   }
 }
@@ -45,10 +69,20 @@ NULL
 
 #' Ranked bar chart of a cf_compare scoreboard metric.
 #'
-#' @param cmp A \code{cfomics_compare} object.
-#' @param metric Which scoreboard column to rank by (default \code{"r_loss"}).
-#' @param ... Ignored.
+#' @param cmp A \code{cateomics_compare} object.
+#' @param metric Which scoreboard metric to rank by (default
+#'   \code{"r_loss"}): \code{"r_loss"}, \code{"dr_loss"},
+#'   \code{"factual_loss"}, \code{"r_squared_score"},
+#'   \code{"dr_squared_score"} or \code{"factual_squared_score"}. One this
+#'   comparison did not score falls back to one it did; any other name is an
+#'   error. The descriptive columns of the scoreboard are not metrics.
+#' @param ... Not used; naming an unknown argument is an error.
 #' @return A ggplot object (methods ranked best-to-worst by the metric).
+#'
+#'   The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+#'   themes or scales to it restyles the panel. The single colours are set as
+#'   constants rather than mapped, so a colour scale added afterwards does not
+#'   reach them.
 #' @examples
 #' # A one-method comparison keeps the example fast (no Python, no MCMC).
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
@@ -58,21 +92,26 @@ NULL
 #' cf_plot_compare(cmp, metric = "r_loss")
 #' @export
 cf_plot_compare <- function(cmp, metric = "r_loss", ...) {
-  if (!inherits(cmp, "cfomics_compare")) {
-    rlang::abort("cmp must be a cfomics_compare.", class = "cfomics_invalid_input")
+  if (!inherits(cmp, "cateomics_compare")) {
+    rlang::abort("cmp must be a cateomics_compare.", class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_compare()")
   .cf_require_ggplot("cf_plot_compare")
   sb <- cmp$scoreboard
+  # A name that is not one of the six metrics is an error; a metric this
+  # comparison did not score falls back to one it did, so the default works
+  # whatever cf_compare ran.
+  higher_better <- .cf_metric_higher_better(metric)
   if (!metric %in% colnames(sb)) {
-    metric <- intersect(c("r_loss", "dr_loss", "factual_loss"), colnames(sb))[1L]
+    metric <- intersect(names(.cf_metric_directions), colnames(sb))[1L]
     if (is.na(metric)) {
       rlang::abort(
         c("No usable metric column in scoreboard.",
-          i = "Pass a loss column of cmp$scoreboard as `metric` (e.g. 'r_loss', 'dr_loss', 'factual_loss')."),
-        class = "cfomics_plot_no_metric")
+          i = "Pass a metric column of cmp$scoreboard as `metric` (e.g. 'r_loss', 'dr_loss', 'factual_loss')."),
+        class = "cateomics_plot_no_metric")
     }
+    higher_better <- .cf_metric_higher_better(metric)
   }
-  higher_better <- .cf_metric_higher_better(metric)
   # Bar label = the scoreboard identity: `label` (method_base) in grid mode,
   # else the bare `method`.
   id_vec <- if ("label" %in% colnames(sb)) sb$label else sb$method
@@ -102,30 +141,39 @@ cf_plot_compare <- function(cmp, metric = "r_loss", ...) {
 
 # =========================================================================
 # cf_plot_evaluate: unified evaluate views by type=.
-# rate / gates / blp all read the cfomics_evaluate object.
+# rate / gates / blp all read the cateomics_evaluate object.
 # =========================================================================
 
-#' Plot a cf_evaluate result: RATE curve, GATES bars, or BLP calibration.
+#' Plot a cf_evaluate result: TOC curve, GATES bars, or BLP calibration.
 #'
-#' @param eval A \code{cfomics_evaluate} object (from \code{cf_evaluate}).
-#' @param type Which view: \code{"rate"} (TOC(q) targeting-operator curve,
-#'   default), \code{"gates"} (group ATE bars with an overall-ATE line), or
-#'   \code{"blp"} (best-linear-predictor calibration of predicted vs observed).
-#' @param ... Ignored.
+#' @param eval A \code{cateomics_evaluate} object (from \code{cf_evaluate}).
+#' @param type Which view: \code{"rate"} (the TOC curve over q, default),
+#'   \code{"gates"} (group ATE bars with an overall-ATE line), or
+#'   \code{"blp"} (best-linear-predictor calibration: the DR pseudo-outcome
+#'   against the predicted effect, one point per sample, with the fitted line
+#'   and a slope-1 reference).
+#' @param ... Not used; naming an unknown argument is an error.
 #' @return A ggplot object.
+#'
+#'   The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+#'   themes or scales to it restyles the panel. The single colours are set as
+#'   constants rather than mapped, so a colour scale added afterwards does not
+#'   reach them.
 #' @examples
-#' # Evaluate a fast R-native causal forest, then plot the RATE curve.
+#' # Evaluate a fast R-native causal forest, then plot the TOC curve.
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
 #' fit <- cf_fit(data = se, Y = "outcome", T = "treatment",
 #'               X_baseline = c("age", "sex"), method = "grf",
 #'               n_features = 40, partition = "oof")
-#' ev <- cf_evaluate(fit, eval_nuisance = "rf", eval_propensity_score = 0.5)
+#' ev <- cf_evaluate(fit)
 #' cf_plot_evaluate(ev, type = "rate")
 #' @export
 cf_plot_evaluate <- function(eval, type = c("rate", "gates", "blp"), ...) {
-  if (!inherits(eval, "cfomics_evaluate")) {
-    rlang::abort("eval must be a cfomics_evaluate.", class = "cfomics_invalid_input")
+  if (!inherits(eval, "cateomics_evaluate")) {
+    rlang::abort("eval must be a cateomics_evaluate.", class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_evaluate()")
+  .cf_require_ggplot("cf_plot_evaluate")
   type <- match.arg(type)
   switch(type,
          rate  = .cf_plot_eval_rate(eval, ...),
@@ -137,69 +185,105 @@ cf_plot_evaluate <- function(eval, type = c("rate", "gates", "blp"), ...) {
 #' @keywords internal
 #' @noRd
 .cf_plot_eval_blp <- function(eval, ...) {
-  if (!inherits(eval, "cfomics_evaluate")) {
-    rlang::abort("eval must be a cfomics_evaluate.", class = "cfomics_invalid_input")
+  if (!inherits(eval, "cateomics_evaluate")) {
+    rlang::abort("eval must be a cateomics_evaluate.", class = "cateomics_invalid_input")
   }
   .cf_require_ggplot("cf_plot_evaluate")
-  pd <- eval$blp$plot_data
+  pd <- eval$blp$points
   if (is.null(pd)) {
     rlang::abort(
       c("The BLP calibration has no data to plot.",
-        i = "Run cf_evaluate() with 'blp' in `metrics` (the default); near-constant estimated effects collapse the bins and produce none."),
-      class = "cfomics_plot_no_data")
+        i = "Run cf_evaluate() with 'blp' in `metrics` (the default)."),
+      class = "cateomics_plot_no_data")
   }
   df <- data.frame(
-    predicted = as.numeric(pd$predicted_mean),
-    observed  = as.numeric(pd$observed_mean),
-    lower     = as.numeric(pd$ci_lower),
-    upper     = as.numeric(pd$ci_upper),
+    predicted = as.numeric(pd$predicted),
+    observed  = as.numeric(pd$observed),
     stringsAsFactors = FALSE
   )
-  slope <- eval$blp$slope$estimate
-  .cf_build_blp(df, slope)
+  sl <- eval$blp$slope
+  # The regressor is centred, so the stored intercept is the fitted value at
+  # the mean tau-hat; shifting it back puts the fitted line on the axes drawn.
+  intercept <- eval$blp$intercept - sl$estimate * mean(df$predicted, na.rm = TRUE)
+  .cf_build_blp(df, sl$estimate, intercept, sl$ci_lower, sl$ci_upper)
 }
 
 #' @keywords internal
 #' @noRd
-.cf_build_blp <- function(df, slope) {
-  ggplot2::ggplot(df, ggplot2::aes(x = .data[["predicted"]],
-                                   y = .data[["observed"]])) +
+.cf_build_blp <- function(df, slope, intercept, ci_lower = NA_real_,
+                          ci_upper = NA_real_) {
+  # One point per sample against the pseudo-outcome the slope was fitted on.
+  # Binning the points by tau-hat quantile would draw the group effects
+  # `cf_plot_evaluate(type = "gates")` already draws, from the same bins. The
+  # two axes share a unit, but the pseudo-outcome spreads several times wider
+  # than the estimates it is regressed on, so a fixed aspect ratio would make
+  # the panel too tall to read; the reference line is named in the subtitle
+  # instead of being left to look like a diagonal.
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = .data[["predicted"]],
+                                        y = .data[["observed"]])) +
     ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed",
-                         colour = "grey50") +
-    ggplot2::geom_errorbar(
-      ggplot2::aes(ymin = .data[["lower"]], ymax = .data[["upper"]]),
-      width = 0, colour = "grey60") +
-    ggplot2::geom_point(colour = .CF_OKABE_ITO[1], size = 2.5) +
-    ggplot2::coord_equal() +
-    ggplot2::labs(x = "Predicted CATE (bin mean)",
-                  y = "Observed effect (DR, bin mean)",
+                         colour = "grey50")
+  # The lines whose slope lies inside the reported interval, pivoting through
+  # the fitted centroid. It is not a confidence band for the fitted line: the
+  # intercept's own uncertainty is not stored, so this is the part of the
+  # band the slope accounts for, and the subtitle says so.
+  sub <- sprintf("solid = BLP fit (slope = %.2f; 1 = calibrated), dashed = slope 1",
+                 slope)
+  if (is.finite(ci_lower) && is.finite(ci_upper)) {
+    xbar <- mean(df$predicted, na.rm = TRUE)
+    ybar <- slope * xbar + intercept
+    xs <- seq(min(df$predicted, na.rm = TRUE), max(df$predicted, na.rm = TRUE),
+              length.out = 100L)
+    band <- data.frame(
+      x    = xs,
+      ymin = ybar + pmin(ci_lower * (xs - xbar), ci_upper * (xs - xbar)),
+      ymax = ybar + pmax(ci_lower * (xs - xbar), ci_upper * (xs - xbar)))
+    p <- p + ggplot2::geom_ribbon(
+      data = band,
+      ggplot2::aes(x = .data[["x"]], ymin = .data[["ymin"]],
+                   ymax = .data[["ymax"]]),
+      inherit.aes = FALSE, fill = .CF_OKABE_ITO[2], alpha = 0.18)
+    # Wrapped, not shortened: at the default figure width of seven inches a
+    # single line loses its tail, and the clause that goes is the one naming
+    # the shading this view added.
+    sub <- sprintf(paste0("solid = BLP fit (slope = %.2f [%.2f, %.2f]; ",
+                          "1 = calibrated), dashed = slope 1\n",
+                          "shaded = slopes inside the interval"),
+                   slope, ci_lower, ci_upper)
+  }
+  p +
+    ggplot2::geom_point(colour = .CF_OKABE_ITO[1], size = 1.6, alpha = 0.7) +
+    ggplot2::geom_abline(slope = slope, intercept = intercept,
+                         colour = .CF_OKABE_ITO[2], linewidth = 0.8) +
+    ggplot2::labs(x = "Predicted CATE (out-of-fold)",
+                  y = "DR pseudo-outcome",
                   title = "Calibration of predicted treatment effect",
-                  subtitle = sprintf("BLP slope = %.2f (1 = calibrated)", slope)) +
+                  subtitle = sub) +
     .cf_theme()
 }
 
 
 # =========================================================================
-# .cf_plot_eval_rate: TOC(q) curve (via cf_plot_evaluate).
+# .cf_plot_eval_rate: the TOC(q) curve (via cf_plot_evaluate).
 # =========================================================================
 
-#' RATE / TOC(q) view (internal; cf_plot_evaluate(type = "rate")).
+#' TOC(q) view (internal; cf_plot_evaluate(type = "rate")).
 #' @keywords internal
 #' @noRd
 .cf_plot_eval_rate <- function(eval, ...) {
-  if (!inherits(eval, "cfomics_evaluate")) {
-    rlang::abort("eval must be a cfomics_evaluate.", class = "cfomics_invalid_input")
+  if (!inherits(eval, "cateomics_evaluate")) {
+    rlang::abort("eval must be a cateomics_evaluate.", class = "cateomics_invalid_input")
   }
   .cf_require_ggplot("cf_plot_evaluate")
-  if (is.null(eval$rate_curve)) {
+  if (is.null(eval$rate$curve)) {
     rlang::abort(
-      c("The evaluation has no RATE curve to plot.",
+      c("The evaluation has no TOC curve to plot.",
         i = "Run cf_evaluate(..., metrics = c('rate', ...)) first; 'rate' is included by default."),
-      class = "cfomics_plot_no_data")
+      class = "cateomics_plot_no_data")
   }
-  rc <- eval$rate_curve
+  rc <- eval$rate$curve
   df <- data.frame(quantile = as.numeric(rc$quantile),
-                   rate     = as.numeric(rc$rate),
+                   toc      = as.numeric(rc$toc),
                    lower    = as.numeric(rc$ci_lower),
                    upper    = as.numeric(rc$ci_upper),
                    stringsAsFactors = FALSE)
@@ -210,15 +294,15 @@ cf_plot_evaluate <- function(eval, type = c("rate", "gates", "blp"), ...) {
 #' @noRd
 .cf_build_rate <- function(df) {
   ggplot2::ggplot(df, ggplot2::aes(x = .data[["quantile"]],
-                                   y = .data[["rate"]])) +
+                                   y = .data[["toc"]])) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
     ggplot2::geom_ribbon(
       ggplot2::aes(ymin = .data[["lower"]], ymax = .data[["upper"]]),
       alpha = 0.2, fill = .CF_OKABE_ITO[1]) +
     ggplot2::geom_line(colour = .CF_OKABE_ITO[1], linewidth = 0.8) +
     ggplot2::labs(x = "Treated fraction q (top by predicted effect)",
-                  y = "TOC(q): gain over the overall ATE",
-                  title = "Targeting operator characteristic (RATE)") +
+                  y = "TOC(q) = gain over the overall ATE",
+                  title = "Targeting operator characteristic (TOC)") +
     .cf_theme()
 }
 
@@ -230,10 +314,13 @@ cf_plot_evaluate <- function(eval, type = c("rate", "gates", "blp"), ...) {
 #' Plot the policy-value curve from cf_rule(grid=) with a same-budget random
 #' baseline (PAPE).
 #'
-#' @param rule_grid A \code{cfomics_rule_grid} object.
-#' @param ... Ignored.
+#' @param rule_grid A \code{cateomics_rule_grid} object.
+#' @param ... Not used; naming an unknown argument is an error.
 #' @return A ggplot object. The x-axis is the treated fraction; a dashed line
 #'   marks the same-budget random-assignment policy value (the PAPE baseline).
+#'   Adding layers, themes or scales to it restyles the panel. The two lines
+#'   and the band are coloured by constants rather than by a mapping, so a
+#'   colour scale added afterwards does not reach them.
 #' @examples
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
 #' fit <- cf_fit(data = se, Y = "outcome", T = "treatment",
@@ -243,10 +330,11 @@ cf_plot_evaluate <- function(eval, type = c("rate", "gates", "blp"), ...) {
 #' cf_plot_policy_curve(rg)
 #' @export
 cf_plot_policy_curve <- function(rule_grid, ...) {
-  if (!inherits(rule_grid, "cfomics_rule_grid")) {
-    rlang::abort("rule_grid must be a cfomics_rule_grid.",
-                 class = "cfomics_invalid_input")
+  if (!inherits(rule_grid, "cateomics_rule_grid")) {
+    rlang::abort("rule_grid must be a cateomics_rule_grid.",
+                 class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_policy_curve()")
   .cf_require_ggplot("cf_plot_policy_curve")
   rd <- rule_grid$results
   n_total <- rule_grid$n %||% max(rd$n_treated, na.rm = TRUE)
@@ -299,8 +387,8 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
 #' @keywords internal
 #' @noRd
 .cf_plot_eval_gates <- function(eval, ...) {
-  if (!inherits(eval, "cfomics_evaluate")) {
-    rlang::abort("eval must be a cfomics_evaluate.", class = "cfomics_invalid_input")
+  if (!inherits(eval, "cateomics_evaluate")) {
+    rlang::abort("eval must be a cateomics_evaluate.", class = "cateomics_invalid_input")
   }
   .cf_require_ggplot("cf_plot_evaluate")
   if (is.null(eval$gates) || isTRUE(eval$gates$degenerate) ||
@@ -308,7 +396,7 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
     rlang::abort(
       c("The GATES plot has no group ATEs.",
         i = "Run cf_evaluate() with 'gates' in `metrics` (the default); near-constant estimated effects leave no distinct benefit groups."),
-      class = "cfomics_plot_no_data")
+      class = "cateomics_plot_no_data")
   }
   ga <- eval$gates$group_ate
   df <- data.frame(group = as.integer(ga$group),
@@ -316,10 +404,11 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
                    lower = as.numeric(ga$ci_lower),
                    upper = as.numeric(ga$ci_upper),
                    stringsAsFactors = FALSE)
-  # Overall-ATE reference line: GATES uses equal-count quantile bins, so the
-  # unweighted mean of the per-group DR-ATEs equals the overall DR-ATE.
+  # Overall-ATE reference line: with equal-count quantile bins the
+  # unweighted mean of the per-group DR-ATEs equals the overall DR-ATE, and
+  # ties that collapse a break make it an approximation.
   overall <- mean(df$estimate, na.rm = TRUE)
-  bw_p <- eval$gates$best_worst_test$p_value %||% NA_real_
+  bw_p <- eval$gates$top_bottom_test$p_value %||% NA_real_
   .cf_build_gates(df, overall, bw_p)
 }
 
@@ -328,7 +417,7 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
 .cf_build_gates <- function(df, overall, bw_p) {
   df$group <- factor(df$group)
   sub <- if (is.finite(bw_p))
-    sprintf("dashed = overall ATE; best-worst p = %.3g", bw_p)
+    sprintf("dashed = overall ATE; top - bottom: p = %.3g", bw_p)
   else "dashed = overall ATE"
   ggplot2::ggplot(df, ggplot2::aes(x = .data[["group"]],
                                    y = .data[["estimate"]])) +
@@ -359,7 +448,7 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
 #' \code{shapviz::sv_dependence} for a single \code{feature}. Requires the
 #' \pkg{shapviz} package.
 #'
-#' @param itp A \code{cfomics_interpret} object (from \code{cf_interpret}).
+#' @param itp A \code{cateomics_interpret} object (from \code{cf_interpret}).
 #' @param type One of \code{"bar"} (mean|SHAP| importance, default),
 #'   \code{"beeswarm"} (per-observation SHAP distribution), or
 #'   \code{"dependence"} (SHAP vs feature value for one \code{feature}).
@@ -368,9 +457,19 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
 #' @param top_n Integer; maximum features for the bar / beeswarm view
 #'   (default \code{20}).
 #' @param surrogate Which surrogate to plot ("ridge" / "xgb"); \code{NULL}
-#'   (default) picks the first available.
+#'   (default) picks the first available. For the linear surrogate
+#'   (\code{"ridge"}) the dependence view is a straight line by construction:
+#'   its SHAP value for a feature is that feature's coefficient times its
+#'   standardised value, so the relation it draws has no curvature to show.
+#'   The points are coloured by a second feature that \pkg{shapviz} picks
+#'   with its own interaction heuristic, not one that was asked for, and with
+#'   no interaction in the data the candidates score almost alike.
 #' @param ... Passed to the underlying \pkg{shapviz} function.
-#' @return A ggplot object.
+#' @return A ggplot object, titled and themed like the other
+#'   \code{cf_plot_*} views; adding \code{ggplot2::labs(title = ...)} or a
+#'   \pkg{ggplot2} theme to it replaces either. Adding layers or scales
+#'   restyles the panel, but the single colours are set as constants rather
+#'   than mapped, so a colour scale added afterwards does not reach them.
 #' @examples
 #' # Surrogate SHAP importances from a fast R-native causal forest.
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
@@ -384,9 +483,9 @@ cf_plot_policy_curve <- function(rule_grid, ...) {
 cf_plot_interpret <- function(itp, type = c("bar", "beeswarm", "dependence"),
                               feature = NULL, top_n = 20L, surrogate = NULL,
                               ...) {
-  if (!inherits(itp, "cfomics_interpret")) {
-    rlang::abort("itp must be a cfomics_interpret (from cf_interpret).",
-                 class = "cfomics_invalid_input")
+  if (!inherits(itp, "cateomics_interpret")) {
+    rlang::abort("itp must be a cateomics_interpret (from cf_interpret).",
+                 class = "cateomics_invalid_input")
   }
   type <- match.arg(type)
   sv <- as_shapviz(itp, surrogate = surrogate)
@@ -395,12 +494,28 @@ cf_plot_interpret <- function(itp, type = c("bar", "beeswarm", "dependence"),
       rlang::abort(
         c("type = 'dependence' requires a single `feature` name.",
           i = "Pass exactly one covariate name to `feature`, e.g. feature = 'GENE1'."),
-        class = "cfomics_invalid_input")
+        class = "cateomics_invalid_input")
     }
-    return(shapviz::sv_dependence(sv, v = feature, ...))
+    return(shapviz::sv_dependence(sv, v = feature, ...) +
+             ggplot2::labs(title = "SHAP dependence") +
+             .cf_theme() + .CF_SHAP_COLOUR_BAR)
   }
-  shapviz::sv_importance(sv, kind = type,
-                         max_display = as.integer(top_n)[1L], ...)
+  # shapviz titles none of its plots and draws them on its own theme, so the
+  # title and the look the rest of the family carries are added here. The
+  # SHAP values are the surrogate model's, which the title says so that the
+  # panel is not read as the estimator's own. The bar is the one mark whose
+  # colour carries nothing, so it takes the family's first colour; the
+  # beeswarm and the dependence plot colour by feature value and are left as
+  # shapviz draws them.
+  args <- list(sv, kind = type, max_display = as.integer(top_n)[1L], ...)
+  if (identical(type, "bar") && is.null(args$fill)) {
+    args$fill <- .CF_OKABE_ITO[1]
+  }
+  p <- do.call(shapviz::sv_importance, args) +
+    ggplot2::labs(title = "SHAP importance (surrogate model)") +
+    .cf_theme()
+  if (!identical(type, "bar")) p <- p + .CF_SHAP_COLOUR_BAR
+  p
 }
 
 
@@ -410,11 +525,15 @@ cf_plot_interpret <- function(itp, type = c("bar", "beeswarm", "dependence"),
 
 #' Correlation heatmap of a cf_model_stability object.
 #'
-#' @param stability A \code{cfomics_model_stability} object.
+#' @param stability A \code{cateomics_model_stability} object.
 #' @param cor_method Which stored correlation matrix to show; defaults to the
 #'   object's primary correlation method.
-#' @param ... Ignored.
+#' @param ... Not used; naming an unknown argument is an error.
 #' @return A ggplot object (K x K pairwise correlation of OOF tau-hat).
+#'
+#'   The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+#'   themes or scales to it restyles the panel, and because the fill is mapped,
+#'   a fill scale added afterwards replaces the one here.
 #' @examples
 #' # Two R-native CATE methods (grf + a short-MCMC bcf) so the pairwise
 #' # correlation is non-degenerate; known randomised propensity.
@@ -422,16 +541,20 @@ cf_plot_interpret <- function(itp, type = c("bar", "beeswarm", "dependence"),
 #' cmp <- cf_compare(data = se, Y = "outcome", T = "treatment",
 #'                   X_baseline = c("age", "sex"),
 #'                   methods = c("grf", "bcf"), n_features = 25,
-#'                   n_burn = 10L, n_iter = 10L, n_chains = 1L,  # 1 chain keeps bcf fast
-#'                   propensity_score = 0.5, random_state = 1)
+#'                   # 1 chain keeps bcf fast
+#'                   params = list(bcf = list(nburn = 10L, nsim = 10L,
+#'                                            n_chains = 1L)),
+#'                   propensity_score = 0.5, eval_propensity_score = 0.5,
+#'                   random_state = 1)
 #' stab <- cf_model_stability(cmp)
 #' cf_plot_stability(stab)
 #' @export
 cf_plot_stability <- function(stability, cor_method = NULL, ...) {
-  if (!inherits(stability, "cfomics_model_stability")) {
-    rlang::abort("cf_plot_stability requires a cfomics_model_stability object.",
-                 class = "cfomics_plot_stability_invalid_input")
+  if (!inherits(stability, "cateomics_model_stability")) {
+    rlang::abort("stability must be a cateomics_model_stability object.",
+                 class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_stability()")
   .cf_require_ggplot("cf_plot_stability")
   if (is.null(cor_method)) cor_method <- stability$meta$primary_cor
   mat <- stability$cor_matrices[[cor_method]]
@@ -440,7 +563,7 @@ cf_plot_stability <- function(stability, cor_method = NULL, ...) {
       c(sprintf("No '%s' correlation matrix is stored on this stability object.", cor_method),
         i = sprintf("Available: %s. Pass one as `cor_method`.",
                     paste(names(stability$cor_matrices), collapse = ", "))),
-      class = "cfomics_plot_stability_no_data")
+      class = "cateomics_plot_stability_no_data")
   }
   rn <- rownames(mat); K <- nrow(mat)
   df <- data.frame(row = rep(rn, times = K),
@@ -453,7 +576,10 @@ cf_plot_stability <- function(stability, cor_method = NULL, ...) {
 #' @keywords internal
 #' @noRd
 .cf_build_stability <- function(df, rn, cn, cor_method) {
-  df$row <- factor(df$row, levels = rn)
+  # A discrete y axis puts its first level at the bottom, so the levels are
+  # reversed to put the diagonal where a correlation matrix is read from:
+  # top left to bottom right.
+  df$row <- factor(df$row, levels = rev(rn))
   df$col <- factor(df$col, levels = cn)
   ggplot2::ggplot(df, ggplot2::aes(x = .data[["col"]], y = .data[["row"]],
                                    fill = .data[["val"]])) +
@@ -464,8 +590,9 @@ cf_plot_stability <- function(stability, cor_method = NULL, ...) {
                                   high = "#2166AC", midpoint = 0,
                                   limits = c(-1, 1), name = "correlation") +
     ggplot2::labs(x = NULL, y = NULL,
-                  title = "Pairwise agreement of predicted effects",
-                  subtitle = sprintf("%s correlation of OOF tau-hat", cor_method)) +
+                  title = "Pairwise tau correlation across methods",
+                  subtitle = sprintf("%s correlation of out-of-fold tau-hat",
+                                     tools::toTitleCase(cor_method))) +
     .cf_theme() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 35, hjust = 1))
 }
@@ -477,10 +604,13 @@ cf_plot_stability <- function(stability, cor_method = NULL, ...) {
 
 #' Plot the policy tree from cf_rule(type = "tree").
 #'
-#' @param rule A \code{cfomics_rule} produced by \code{cf_rule(type = "tree")}.
-#' @param backend One of \code{"auto"}, \code{"rpart.plot"}, \code{"base"}.
-#' @param ... Ignored.
-#' @return Rendered to the active device (invisible \code{NULL}).
+#' @param rule A \code{cateomics_rule} produced by \code{cf_rule(type = "tree")}.
+#' @param ... Not used; naming an unknown argument is an error.
+#' @return The \code{DiagrammeR} htmlwidget for the tree, with the leaves
+#'   labelled by what they do and a caption naming the scale the splits are
+#'   on (the preprocessed covariates). When \code{DiagrammeR} is not
+#'   installed, the text summary is printed and \code{NULL} is returned
+#'   invisibly.
 #' @examples
 #' # Draw the policy tree from a fast R-native causal forest.
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
@@ -490,44 +620,46 @@ cf_plot_stability <- function(stability, cor_method = NULL, ...) {
 #' rule <- cf_rule(fit, type = "tree")
 #' cf_plot_rule(rule)
 #' @export
-cf_plot_rule <- function(rule, backend = c("auto", "rpart.plot", "base"), ...) {
-  backend <- match.arg(backend)
-  if (!inherits(rule, "cfomics_rule")) {
-    rlang::abort("rule must be a cfomics_rule produced by cf_rule().",
-                 class = "cfomics_invalid_input")
+cf_plot_rule <- function(rule, ...) {
+  if (!inherits(rule, "cateomics_rule")) {
+    rlang::abort("rule must be a cateomics_rule produced by cf_rule().",
+                 class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_rule()")
   if (!identical(rule$type, "tree") || is.null(rule$tree)) {
     rlang::abort(
       "cf_plot_rule() requires a cf_rule(type = 'tree') with a fitted tree.",
-      class = "cfomics_invalid_input")
+      class = "cateomics_invalid_input")
   }
-  if (inherits(rule$tree, "policy_tree")) {
-    if (requireNamespace("DiagrammeR", quietly = TRUE)) {
-      plot(rule$tree)
-    } else {
-      rlang::inform(
-        c("DiagrammeR not installed; printing the policy_tree text summary.",
-          i = "install.packages('DiagrammeR') for the graph."),
-        class = "cfomics_policy_tree_text_fallback")
-      print(rule$tree)
+  if (requireNamespace("DiagrammeR", quietly = TRUE)) {
+    # policytree's plot method builds a DiagrammeR widget and returns it, so
+    # the widget has to be handed back for anything to be rendered outside an
+    # auto-printing console. Its leaves are numbered actions and it carries no
+    # caption, so the graph alone does not say which action treats, nor that
+    # the splits are on the preprocessed scale. Both are added to the DOT the
+    # widget holds rather than redrawn.
+    w <- plot(rule$tree)
+    dot <- w$x$diagram
+    actions <- rule$tree$action.names %||% c("control", "treat")
+    for (k in seq_along(actions)) {
+      dot <- gsub(sprintf("action = %d", k),
+                  if (identical(actions[k], "treat")) "treat" else "do not treat",
+                  dot, fixed = TRUE)
     }
-    return(invisible(NULL))
-  }
-  use_rpartplot <- (backend %in% c("auto", "rpart.plot")) &&
-                   requireNamespace("rpart.plot", quietly = TRUE)
-  if (use_rpartplot) {
-    rpart.plot::rpart.plot(rule$tree, type = 2L, extra = 101L,
-                           fallen.leaves = TRUE, main = "Treatment policy tree")
-  } else if (identical(backend, "rpart.plot")) {
-    rlang::abort(
-      c("rpart.plot is required for backend='rpart.plot'.",
-        i = "install.packages('rpart.plot') or use backend='base'."),
-      class = "cfomics_optional_dependency_missing")
+    dot <- sub("{", paste0("{\n labelloc=\"t\"; fontsize=11; ",
+                           "label=\"Policy tree: who to treat",
+                           "\\n(splits are on the preprocessed covariate scale)\";"),
+               dot, fixed = TRUE)
+    w$x$diagram <- dot
+    w
   } else {
-    plot(rule$tree, uniform = TRUE, main = "Treatment policy tree")
-    graphics::text(rule$tree, use.n = TRUE, all = TRUE, cex = 0.7)
+    rlang::inform(
+      c("DiagrammeR not installed; printing the policy_tree text summary.",
+        i = "install.packages('DiagrammeR') for the graph."),
+      class = "cateomics_policy_tree_text_fallback")
+    print(rule$tree)
+    invisible(NULL)
   }
-  invisible(NULL)
 }
 
 
@@ -537,15 +669,19 @@ cf_plot_rule <- function(rule, backend = c("auto", "rpart.plot", "base"), ...) {
 
 #' Plot the distribution of estimated CATE (tau-hat) for a fitted model.
 #'
-#' Histogram of the in-sample predicted conditional average treatment effects
-#' from a \code{cf_model} -- a quick look at how much treatment-effect
-#' heterogeneity the model found.
+#' Histogram of the tau-hat the fit carries. An ensemble has no in-sample
+#' estimate, so its out-of-fold one is shown.
 #'
 #' @param fit A \code{cf_model} object from \code{\link{cf_fit}}.
 #' @param bins Integer; number of histogram bins (default \code{30}).
-#' @param ... Ignored.
+#' @param ... Not used; naming an unknown argument is an error.
 #' @return A ggplot object (histogram of predicted CATE), or \code{NULL}
 #'   invisibly if no per-sample effects are available.
+#'
+#'   The object returned is an ordinary \pkg{ggplot2} plot: adding layers,
+#'   themes or scales to it restyles the panel. The single colours are set as
+#'   constants rather than mapped, so a colour scale added afterwards does not
+#'   reach them.
 #' @examples
 #' # Distribution of estimated CATE from a fast R-native causal forest.
 #' se  <- cf_example_data(n = 40, p = 60, n_prog = 8, n_pred = 4, seed = 1)
@@ -556,19 +692,39 @@ cf_plot_rule <- function(rule, backend = c("auto", "rpart.plot", "base"), ...) {
 cf_plot_cate <- function(fit, bins = 30L, ...) {
   if (!inherits(fit, "cf_model")) {
     rlang::abort("fit must be a cf_model from cf_fit().",
-                 class = "cfomics_invalid_input")
+                 class = "cateomics_invalid_input")
   }
+  .cf_reject_dots(..., .fn = "cf_plot_cate()")
   .cf_require_ggplot("cf_plot_cate")
   tau <- tryCatch(predict(fit, type = "tau"), error = function(e) NULL)
   if (is.null(tau) || all(is.na(tau))) {
     rlang::inform("No per-sample CATE available; nothing to plot.")
     return(invisible(NULL))
   }
-  df <- data.frame(cate = as.numeric(tau))
-  ggplot2::ggplot(df, ggplot2::aes(x = .data[["cate"]])) +
-    ggplot2::geom_histogram(bins = as.integer(bins)[1L],
-                            fill = .CF_OKABE_ITO[1], colour = "white") +
+  # Build in a frame that holds only the data frame and the bin count: a
+  # ggplot keeps a reference to the environment its aesthetics were made in,
+  # so building here would carry the whole fit along with the plot.
+  .cf_build_cate(data.frame(cate = as.numeric(tau)), as.integer(bins)[1L],
+                 ate = fit$res$ate %||% NA_real_)
+}
+
+#' @keywords internal
+#' @noRd
+.cf_build_cate <- function(df, bins, ate = NA_real_) {
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = .data[["cate"]])) +
+    ggplot2::geom_histogram(bins = bins,
+                            fill = .CF_OKABE_ITO[1], colour = "white")
+  # The average effect, so the spread can be read against something: a
+  # near-constant tau-hat and a wide one otherwise look alike.
+  sub <- NULL
+  if (is.finite(ate)) {
+    p <- p + ggplot2::geom_vline(xintercept = ate, linetype = "dashed",
+                                 colour = "grey40")
+    sub <- sprintf("dashed = average effect (%.3g)", ate)
+  }
+  p +
     ggplot2::labs(x = "Predicted CATE (tau-hat)", y = "Count",
-                  title = "Distribution of estimated treatment effects") +
+                  title = "Distribution of estimated treatment effects",
+                  subtitle = sub) +
     .cf_theme()
 }
