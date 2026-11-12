@@ -2,7 +2,9 @@ citHeader("To cite CATEomics in publications use:")
 
 bibentry(
   bibtype = "Manual",
-  title   = "CATEomics: Comparing, Selecting and Combining CATE Estimators for Omics Data",
+  title   = paste("CATEomics: an R package for model selection and ensemble",
+                  "learning in heterogeneous treatment effect estimation from",
+                  "high-dimensional omics data"),
   author  = c(person("Takeru", "Furuta"),
               person("Koichi", "Himori"),
               person("Bingyuan", "Zhang"),
