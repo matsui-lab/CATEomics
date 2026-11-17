@@ -122,15 +122,10 @@ Please report bugs and feature requests on the
 
 ## How this package was written
 
-Much of the code, tests, documentation and vignettes in CATEomics was
-written by an AI coding agent (Claude Code, Anthropic), working from the
-authors' design and under their direction and review. Provenance is recorded
-per commit with a `Co-Authored-By: Claude` trailer. The authors are responsible
-for the correctness of the code and for maintaining it.
-
-The contributed code is redistributable under this package's MIT terms, and
-`Assisted-by: Claude Code (Anthropic)` records the same provenance as the
-trailer above.
+The authors designed CATEomics and reviewed and validated its implementation.
+Claude Code (Anthropic) was used to generate code, tests, and software
+documentation under the authors' direction. The authors take responsibility
+for the final software.
 
 No third-party source file is vendored into the package; the only third-party
 material it redistributes is the MSigDB hallmark gene symbols carried in
